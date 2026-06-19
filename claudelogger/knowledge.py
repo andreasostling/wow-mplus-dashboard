@@ -1,16 +1,16 @@
 """Ability knowledge: was a killer ability interruptible / its source stunnable?
 
-The agreed design is a hybrid. The empirical layer (this module, v1) learns the
-ground truth straight from the logs:
+Three layers, from highest to lowest priority:
 
-  * A spell that ever appears as the *interrupted* spell (extraAbilityGameID) in
-    an interrupt event is, by proof, interruptible.
-  * An NPC that ever received a stun/CC debuff is, by proof, stun/CC-able.
+  1. **Curated spell categories** (`mplus-interrupts` database from method.gg):
+     per-spell categories — `interrupt` (kickable), `cc` (CC/stun to stop),
+     `stun` (stun-specific). This is the most precise source.
 
-This is conservative in the right direction: it only asserts "interruptible" when
-your group actually proved it. The blind spot — a dangerous cast your group never
-once kicked all season — is exactly where the curated MDT layer plugs in
-(`load_mdt`, stubbed below) to add interruptibility/stun facts you never observed.
+  2. **MDT** (Mythic Dungeon Tools): per-spell `interruptible` flag, per-NPC
+     `isBoss` flag. Covers spells not in the curated database.
+
+  3. **Empirical** (from WCL logs): spells actually kicked + NPCs actually CC'd.
+     Fills gaps for abilities not in either curated source.
 
 The comp-CC seed maps the well-known kick/stun spell IDs to a label and kind so
 the pull-level "do we need stuns" tally knows what tools each spec brought.
@@ -169,11 +169,20 @@ class AbilityKnowledge:
     ccable_npc_game_ids: set[int] = field(default_factory=set)
     # Per-spec/source CC the comp actually used: ability_id -> count.
     comp_cc_used: dict[int, int] = field(default_factory=lambda: defaultdict(int))
-    # Curated facts from MDT (spell_id -> {"interruptible": bool, "stunnable": bool}).
+    # Curated facts from MDT (spell_id -> {"interruptible": bool}).
     mdt_spell_facts: dict[int, dict[str, bool]] = field(default_factory=dict)
+    # MDT NPC sets: boss NPCs are immune to CC; non-boss MDT NPCs are CC-able.
+    boss_npc_game_ids: set[int] = field(default_factory=set)
+    mdt_npc_game_ids: set[int] = field(default_factory=set)
+    # Curated per-spell categories from mplus-interrupts database.
+    # spell_id -> "interrupt"|"cc"|"stun" (only stop-relevant categories).
+    spell_categories: dict[int, str] = field(default_factory=dict)
 
     def is_interruptible(self, spell_id: int) -> tuple[bool, str]:
-        """Returns (interruptible, source) where source is 'observed'|'mdt'|'unknown'."""
+        """Returns (interruptible, source) where source is 'curated'|'observed'|'mdt'|'unknown'."""
+        cat = self.spell_categories.get(spell_id)
+        if cat is not None:
+            return cat == "interrupt", "curated"
         if spell_id in self.interruptible_spells:
             return True, "observed"
         fact = self.mdt_spell_facts.get(spell_id)
@@ -182,11 +191,17 @@ class AbilityKnowledge:
         return False, "unknown"
 
     def is_source_stunnable(self, npc_game_id: int, spell_id: int) -> tuple[bool, str]:
+        """Returns (stunnable, source). Curated spell categories take highest priority,
+        then MDT boss/non-boss, then empirical."""
+        cat = self.spell_categories.get(spell_id)
+        if cat in ("cc", "stun"):
+            return True, "curated"
+        if npc_game_id in self.boss_npc_game_ids:
+            return False, "boss"
+        if npc_game_id in self.mdt_npc_game_ids:
+            return True, "mdt"
         if npc_game_id in self.ccable_npc_game_ids:
             return True, "observed"
-        fact = self.mdt_spell_facts.get(spell_id)
-        if fact is not None and "stunnable" in fact:
-            return fact["stunnable"], "mdt"
         return False, "unknown"
 
 
@@ -237,7 +252,48 @@ def merge(kbs: Iterable[AbilityKnowledge]) -> AbilityKnowledge:
         for ab, n in kb.comp_cc_used.items():
             out.comp_cc_used[ab] += n
         out.mdt_spell_facts.update(kb.mdt_spell_facts)
+        out.boss_npc_game_ids |= kb.boss_npc_game_ids
+        out.mdt_npc_game_ids |= kb.mdt_npc_game_ids
+        out.spell_categories.update(kb.spell_categories)
     return out
+
+
+_SPELL_CAT_URL = "https://raw.githubusercontent.com/albvar/mplus-interrupts/main/mplus_interrupts.json"
+# Categories that correspond to "stop the cast" levers.
+_STOP_CATEGORIES = {"interrupt", "cc", "stun"}
+
+
+def load_spell_categories(cache_dir) -> dict[int, str]:
+    """Curated per-spell action categories from the mplus-interrupts database.
+    Returns spell_id -> category for stop-relevant spells only. Cached to disk."""
+    import json
+    import urllib.error
+    import urllib.request
+    from pathlib import Path
+
+    cache = Path(cache_dir) / "spell_categories.json"
+    if cache.exists():
+        return {int(k): v for k, v in json.loads(cache.read_text(encoding="utf-8")).items()}
+
+    try:
+        req = urllib.request.Request(_SPELL_CAT_URL, headers={"User-Agent": "ClaudeLogger"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+    except (urllib.error.URLError, urllib.error.HTTPError, ValueError) as e:
+        print(f"  [spell-cats] could not fetch mplus-interrupts ({e}); MDT/empirical only.", file=__import__("sys").stderr)
+        return {}
+
+    cats: dict[int, str] = {}
+    for dungeon in data.get("dungeons", []):
+        for ability in dungeon.get("abilities", []):
+            cat = ability.get("category", "")
+            sid = ability.get("spell_id")
+            if cat in _STOP_CATEGORIES and sid:
+                cats[sid] = cat
+
+    cache.write_text(json.dumps({str(k): v for k, v in cats.items()}), encoding="utf-8")
+    print(f"  [spell-cats] {len(cats)} stop-relevant spells cached from mplus-interrupts.", file=__import__("sys").stderr)
+    return cats
 
 
 def load_mdt(cache_dir, expansion: str = "Midnight") -> dict[int, dict[str, bool]]:
@@ -247,3 +303,18 @@ def load_mdt(cache_dir, expansion: str = "Midnight") -> dict[int, dict[str, bool
     """
     from . import mdt
     return mdt.load_spell_facts(cache_dir, expansion)
+
+
+def load_mdt_npc_sets(
+    cache_dir, expansion: str = "Midnight"
+) -> tuple[set[int], set[int]]:
+    """Return (boss_npc_game_ids, mdt_npc_game_ids) from cached MDT NPC data."""
+    from . import mdt
+    npc_facts = mdt.load_npc_facts(cache_dir, expansion)
+    boss_ids: set[int] = set()
+    all_ids: set[int] = set()
+    for npc_id, info in npc_facts.items():
+        all_ids.add(npc_id)
+        if info.get("is_boss"):
+            boss_ids.add(npc_id)
+    return boss_ids, all_ids

@@ -88,6 +88,8 @@ def _comp_cc_labels(kb: knowledge.AbilityKnowledge) -> dict[str, list[str]]:
 def analyze_report(
     client: WCLClient, cfg: Config, code: str, only_fight: int | None,
     mdt_facts: dict | None = None,
+    mdt_npc_sets: tuple[set[int], set[int]] | None = None,
+    spell_cats: dict[int, str] | None = None,
 ) -> list[dict]:
     rep = fetch.get_report(client, code)
     runs: list[dict] = []
@@ -99,6 +101,10 @@ def analyze_report(
         return runs
     if mdt_facts is None:
         mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)
+    if mdt_npc_sets is None:
+        mdt_npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
+    if spell_cats is None:
+        spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
 
     for fight in mplus:
         print(f"  fetching {code} fight {fight.id}: {fight.name} +{fight.keystone_level} …", file=sys.stderr)
@@ -106,6 +112,8 @@ def analyze_report(
         roles = fetch.get_roles(client, code, fight.id)
         kb = knowledge.build_from_events(fe.of("Interrupts"), fe.of("Casts"), rep.actors)
         kb.mdt_spell_facts = mdt_facts
+        kb.boss_npc_game_ids, kb.mdt_npc_game_ids = mdt_npc_sets
+        kb.spell_categories = spell_cats
         # Healer mana (for the "heal more vs OOM" call) — fetched per healer.
         healer_ids = [aid for aid, (role, _s) in roles.items() if role == "healer"]
         mana_series = fetch.fetch_healer_mana(client, code, fight, healer_ids[0]) if healer_ids else []
@@ -130,7 +138,9 @@ def cmd_report(args) -> int:
     cfg = Config.load()
     client = WCLClient(cfg.client_id, cfg.client_secret, cfg.cache_dir)
     mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)
-    runs = analyze_report(client, cfg, args.code, args.fight, mdt_facts)
+    npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
+    spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
+    runs = analyze_report(client, cfg, args.code, args.fight, mdt_facts, npc_sets, spell_cats)
     _emit(cfg, runs, build_route_info(client, cfg, runs))
     return 0
 
@@ -139,11 +149,13 @@ def cmd_season(args) -> int:
     cfg = Config.load()
     client = WCLClient(cfg.client_id, cfg.client_secret, cfg.cache_dir)
     mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)
+    npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
+    spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
     reports = fetch.discover_reports(client, cfg.character_id, args.limit)
     print(f"Discovered {len(reports)} recent report(s) for character {cfg.character_id}.", file=sys.stderr)
     runs: list[dict] = []
     for r in reports:
-        runs.extend(analyze_report(client, cfg, r["code"], None, mdt_facts))
+        runs.extend(analyze_report(client, cfg, r["code"], None, mdt_facts, npc_sets, spell_cats))
     _emit(cfg, runs, build_route_info(client, cfg, runs))
     return 0
 

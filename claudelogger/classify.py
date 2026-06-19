@@ -328,8 +328,14 @@ def _is_big_predictable(top: Contribution | None, max_hp: int, knobs: Knobs) -> 
     and is either a sustained channel/DoT (multi-tick — you watch it tick and react) or a
     catalogued (MDT-known) mechanic the player is expected to anticipate. This is the
     "long channel / strong DoT / known one-shot you should have defensived for" case.
+
+    Counter taxonomy: STOP > AVOID > MITIGATE — if the ability is stoppable (kickable or
+    the caster is CC-able), the answer is "stop it", not "use a defensive".
     """
     if top is None or max_hp <= 0 or top.is_self_or_friendly or top.is_environment:
+        return False
+    # Stoppable beats defensive: if you can kick or stun it, that's the lever.
+    if top.interruptible or top.stunnable:
         return False
     # Generic melee/physical is a threat/pickup or tank-tuning issue, never a
     # "pre-empt the telegraphed cast" defensive case — even if MDT lists the id.

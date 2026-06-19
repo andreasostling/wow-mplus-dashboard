@@ -33,6 +33,7 @@ _SPELL_RE = re.compile(r"\[(\d+)\]\s*=\s*\{([^{}]*)\}")
 _SPELLS_BLOCK = re.compile(r'\["spells"\]\s*=\s*\{')
 _ID_RE = re.compile(r'\["id"\]\s*=\s*(\d+)')
 _NAME_RE = re.compile(r'\["name"\]\s*=\s*"([^"]*)"')
+_IS_BOSS_RE = re.compile(r'\["isBoss"\]\s*=\s*true')
 
 
 def _balanced_block(text: str, brace_start: int) -> str:
@@ -49,7 +50,7 @@ def _balanced_block(text: str, brace_start: int) -> str:
 
 
 def _parse_npc_facts(lua_text: str) -> dict[int, dict]:
-    """npc_id -> {name, interruptible:set[spell_id], spells:set[spell_id]} for one dungeon.
+    """npc_id -> {name, interruptible:set[spell_id], spells:set[spell_id], is_boss:bool} for one dungeon.
 
     Each enemy's name+id precede its ["spells"] block, so we attach a spells block
     to the nearest preceding id/name.
@@ -63,6 +64,10 @@ def _parse_npc_facts(lua_text: str) -> dict[int, dict]:
         npc_id = int(ids[-1])
         names = _NAME_RE.findall(pre)
         name = names[-1] if names else ""
+        # isBoss flag sits between the last ["id"] match and the ["spells"] block.
+        last_id_pos = pre.rfind(f'["id"] = {ids[-1]}')
+        npc_section = pre[last_id_pos:] if last_id_pos >= 0 else ""
+        is_boss = bool(_IS_BOSS_RE.search(npc_section))
         block = _balanced_block(lua_text, m.end() - 1)
         interruptible, spells = set(), set()
         for sm in _SPELL_RE.finditer(block):
@@ -70,11 +75,13 @@ def _parse_npc_facts(lua_text: str) -> dict[int, dict]:
             spells.add(sid)
             if "interruptible" in sm.group(2):
                 interruptible.add(sid)
-        e = out.setdefault(npc_id, {"name": "", "interruptible": set(), "spells": set()})
+        e = out.setdefault(npc_id, {"name": "", "interruptible": set(), "spells": set(), "is_boss": False})
         if name and not e["name"]:
             e["name"] = name
         e["interruptible"] |= interruptible
         e["spells"] |= spells
+        if is_boss:
+            e["is_boss"] = True
     return out
 
 
@@ -167,13 +174,20 @@ def load_npc_facts(
         except (urllib.error.URLError, urllib.error.HTTPError):
             continue
         for nid, f in _parse_npc_facts(lua).items():
-            e = merged.setdefault(nid, {"name": "", "interruptible": set(), "spells": set()})
+            e = merged.setdefault(nid, {"name": "", "interruptible": set(), "spells": set(), "is_boss": False})
             if f["name"] and not e["name"]:
                 e["name"] = f["name"]
             e["interruptible"] |= f["interruptible"]
             e["spells"] |= f["spells"]
+            if f.get("is_boss"):
+                e["is_boss"] = True
     serializable = {
-        str(nid): {"name": f["name"], "interruptible": sorted(f["interruptible"]), "spells": sorted(f["spells"])}
+        str(nid): {
+            "name": f["name"],
+            "interruptible": sorted(f["interruptible"]),
+            "spells": sorted(f["spells"]),
+            "is_boss": f["is_boss"],
+        }
         for nid, f in merged.items()
     }
     cache.write_text(json.dumps(serializable), encoding="utf-8")

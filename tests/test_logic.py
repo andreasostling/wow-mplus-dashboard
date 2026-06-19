@@ -171,6 +171,18 @@ class TestBigPredictable(unittest.TestCase):
         c = contrib(pct=1.0, amount=90000, ability_name="Melee", interruptible_src="mdt")
         self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
 
+    def test_interruptible_overrides_defensive(self):
+        # Fire Spit-like: big sustained channel, but it's kickable — "stop it" not "defensive it".
+        c = contrib(pct=0.8, amount=70000, periodic=True, ticks=8,
+                    interruptible=True, interruptible_src="observed")
+        self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
+
+    def test_stunnable_overrides_defensive(self):
+        # Fire Spit: big sustained channel from a CC-able mob — "stun it" not "defensive it".
+        c = contrib(pct=0.8, amount=70000, periodic=True, ticks=8,
+                    interruptible_src="mdt", stunnable=True, stunnable_src="mdt")
+        self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
+
 
 class TestAssessDefensives(unittest.TestCase):
     def setUp(self):
@@ -265,12 +277,82 @@ class TestKnowledge(unittest.TestCase):
         self.assertTrue(knowledge.is_fixate(0, "Relentless Pursuit"))
         self.assertFalse(knowledge.is_fixate(0, "Shadow Bolt"))
 
+    def test_curated_interrupt_category(self):
+        kb = knowledge.AbilityKnowledge(spell_categories={388862: "interrupt"})
+        interruptible, src = kb.is_interruptible(388862)
+        self.assertTrue(interruptible)
+        self.assertEqual(src, "curated")
+
+    def test_curated_cc_not_kickable(self):
+        # Fire Spit is "cc" category — NOT kickable, only CC-able.
+        kb = knowledge.AbilityKnowledge(spell_categories={1216848: "cc"})
+        interruptible, src = kb.is_interruptible(1216848)
+        self.assertFalse(interruptible)
+        self.assertEqual(src, "curated")
+
+    def test_curated_cc_is_stunnable(self):
+        # Fire Spit "cc" category → stunnable, even on a boss NPC.
+        kb = knowledge.AbilityKnowledge(
+            spell_categories={1216848: "cc"},
+            boss_npc_game_ids={232056},  # pretend dragonhawk is a boss
+        )
+        stunnable, src = kb.is_source_stunnable(232056, 1216848)
+        self.assertTrue(stunnable)
+        self.assertEqual(src, "curated")
+
+    def test_curated_overrides_mdt_and_empirical(self):
+        # Curated "cc" wins even if MDT says interruptible and logs say kickable.
+        kb = knowledge.AbilityKnowledge(
+            spell_categories={42: "cc"},
+            interruptible_spells={42},
+            mdt_spell_facts={42: {"interruptible": True}},
+        )
+        interruptible, src = kb.is_interruptible(42)
+        self.assertFalse(interruptible)  # curated says "cc", not "interrupt"
+        self.assertEqual(src, "curated")
+
+    def test_boss_npc_never_stunnable(self):
+        kb = knowledge.AbilityKnowledge(
+            boss_npc_game_ids={194181},   # Vexamus
+            mdt_npc_game_ids={194181},
+            ccable_npc_game_ids={194181}, # even if observed CC'd in logs
+        )
+        stunnable, src = kb.is_source_stunnable(194181, 388537)
+        self.assertFalse(stunnable)
+        self.assertEqual(src, "boss")
+
+    def test_nonboss_mdt_npc_is_stunnable(self):
+        kb = knowledge.AbilityKnowledge(
+            mdt_npc_game_ids={232056},    # Territorial Dragonhawk (trash)
+        )
+        stunnable, src = kb.is_source_stunnable(232056, 1216848)
+        self.assertTrue(stunnable)
+        self.assertEqual(src, "mdt")
+
+    def test_unknown_npc_falls_back_to_observed(self):
+        kb = knowledge.AbilityKnowledge(ccable_npc_game_ids={99999})
+        stunnable, src = kb.is_source_stunnable(99999, 1)
+        self.assertTrue(stunnable)
+        self.assertEqual(src, "observed")
+
+    def test_unknown_npc_no_data(self):
+        kb = knowledge.AbilityKnowledge()
+        stunnable, src = kb.is_source_stunnable(99999, 1)
+        self.assertFalse(stunnable)
+        self.assertEqual(src, "unknown")
+
     def test_merge_unions(self):
-        a = knowledge.AbilityKnowledge(interruptible_spells={1}, ccable_npc_game_ids={9})
-        b = knowledge.AbilityKnowledge(interruptible_spells={2})
+        a = knowledge.AbilityKnowledge(interruptible_spells={1}, ccable_npc_game_ids={9},
+                                        boss_npc_game_ids={100}, mdt_npc_game_ids={100, 200},
+                                        spell_categories={42: "interrupt"})
+        b = knowledge.AbilityKnowledge(interruptible_spells={2}, mdt_npc_game_ids={300},
+                                        spell_categories={99: "cc"})
         m = knowledge.merge([a, b])
         self.assertEqual(m.interruptible_spells, {1, 2})
         self.assertEqual(m.ccable_npc_game_ids, {9})
+        self.assertEqual(m.boss_npc_game_ids, {100})
+        self.assertEqual(m.mdt_npc_game_ids, {100, 200, 300})
+        self.assertEqual(m.spell_categories, {42: "interrupt", 99: "cc"})
 
 
 # --------------------------------------------------------------------------
@@ -337,6 +419,32 @@ MDT.dungeonEnemies[1] = {
 }
 """
 
+MDT_LUA_BOSS = """
+MDT.dungeonEnemies[1] = {
+  [1] = {
+    ["name"] = "Trash Mob",
+    ["id"] = 11111,
+    ["count"] = 5,
+    ["spells"] = {
+      [444] = { ["interruptible"] = true, },
+    },
+  },
+  [2] = {
+    ["name"] = "Big Boss",
+    ["id"] = 22222,
+    ["count"] = 0,
+    ["isBoss"] = true,
+    ["encounterID"] = 9999,
+    ["characteristics"] = {
+      ["Taunt"] = true,
+    },
+    ["spells"] = {
+      [555] = {},
+    },
+  },
+}
+"""
+
 
 class TestMDTParse(unittest.TestCase):
     def test_spell_facts(self):
@@ -351,6 +459,11 @@ class TestMDTParse(unittest.TestCase):
         self.assertEqual(npc[12345]["interruptible"], {888})
         self.assertEqual(npc[12345]["spells"], {888, 222})
         self.assertEqual(npc[678]["interruptible"], {333})
+
+    def test_npc_facts_boss_flag(self):
+        npc = mdt._parse_npc_facts(MDT_LUA_BOSS)
+        self.assertFalse(npc[11111].get("is_boss", False))
+        self.assertTrue(npc[22222]["is_boss"])
 
     def test_balanced_block(self):
         s = "x{a{b}c}y"
