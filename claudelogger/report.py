@@ -422,6 +422,9 @@ _HTML = r"""<!doctype html>
                border-radius:7px;padding:6px 8px}
   .contrib{color:var(--mut);font-size:12px}
   .lever{color:var(--warn)} .muted{color:var(--mut)}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .brief-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:0 0 14px}
+  .brief-cards .card{padding:10px} .brief-cards .card .n{font-size:20px} .brief-cards .card .l{font-size:11px}
   details summary{cursor:pointer}
   footer{color:var(--mut);font-size:12px;margin-top:30px}
 </style></head>
@@ -504,8 +507,13 @@ function renderBriefing(){
   if(!b){box.append(el('<div class="muted">No data.</div>'));return;}
   const keys=b.key_levels||[];
   const kr = keys.length? (keys.length===1?`+${keys[0]}`:`+${keys[0]}–+${keys[keys.length-1]}`):'?';
-  box.append(el(`<p class="sub">${b.runs} run(s) at ${kr} · ${b.total_deaths} deaths ·
-    CC-starved pulls ${b.cc_starved_pulls}/${b.pulls}</p>`));
+  // dungeon summary cards
+  const avoidHere = rows.filter(x=>x.dungeon===bsel.value && !x.is_cascade && x.avoidable===true).length;
+  const bCards = [['Deaths', b.total_deaths], ['Wipes', b.wipes||0], ['Key levels', kr],
+    ['Avoidable', avoidHere], ['CC-starved pulls', `${b.cc_starved_pulls}/${b.pulls}`]];
+  const bcWrap = el('<div class="brief-cards"></div>');
+  bCards.forEach(([l,n])=>bcWrap.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
+  box.append(bcWrap);
   box.append(el('<h3 class="muted" style="margin:14px 0 6px">🧰 Your CC</h3>'));
   const ccRows = [['Interrupts', b.comp_interrupts], ['True stuns', b.comp_stuns], ['Other CC', b.comp_other_cc]];
   box.append(el(`<table class="kv"><tbody>${ccRows.map(([k,v])=>
@@ -520,7 +528,8 @@ function renderBriefing(){
   box.append(tbl);
   const rt=b.route;
   if(rt){
-    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — kick targets (${rt.n_npcs} mobs, ${rt.pulls} pulls)</h3>`));
+    const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
+    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — kick targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
     if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
     else if(!(rt.kick_targets||[]).length){ box.append(el('<div class="muted">No interruptible casters on the planned route.</div>')); }
     else{
@@ -547,6 +556,13 @@ function renderBriefing(){
     const mx=Math.max(...b.leaked_casts.map(a=>a[1]));
     b.leaked_casts.forEach(([sp,n])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
       <span class="track"><span class="fill" style="width:${100*n/mx}%"></span></span><span>${n}</span></div>`)));
+  }
+  // who dies here
+  if((b.players_dying||[]).length){
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">💀 Who dies here</h3>'));
+    const pdmx=Math.max(...b.players_dying.map(a=>a[1]));
+    b.players_dying.forEach(([p,n])=>box.append(el(`<div class="bar"><span>${esc(p)}</span>
+      <span class="track"><span class="fill" style="width:${100*n/pdmx}%"></span></span><span>${n}</span></div>`)));
   }
 }
 bsel.onchange = renderBriefing;
@@ -610,7 +626,8 @@ function render(){
         :(dv.available&&dv.available.length)
         ?`<span class="muted" title="off cooldown but mitigation may not have covered it">had: ${esc(dv.available.join(', '))}</span>`
         :'<span class="muted">none up</span>';
-    tb.append(el(`<tr><td>${esc(d.dungeon)} +${d.key}</td><td>${esc(d.player)}</td><td>${esc(d.role)}</td>
+    const wclUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(d.report)}`;
+    tb.append(el(`<tr><td><a href="${wclUrl}" target="_blank" rel="noopener" title="Open on WCL">${esc(d.dungeon)} +${d.key}</a></td><td>${esc(d.player)}</td><td>${esc(d.role)}</td>
       <td>${d.time_in_fight_s}</td><td>${esc(d.killer)}</td>
       <td><span class="pill ${cls}">${esc(lbl)}</span>${d.one_shot?' <span class="muted">1-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑trigger</span>':''}${d.is_cascade?' <span class="muted">cascade</span>':''}</td>
       <td>${av}</td><td>${d.confidence}</td><td class="contrib">${contrib||'<span class=muted>—</span>'}</td>
