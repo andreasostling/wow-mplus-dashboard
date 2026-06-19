@@ -843,27 +843,51 @@ function renderBriefing(){
     }
   }
   if((b.dangerous_casts||[]).length){
-    const allDanger=b.dangerous_casts; const shown=allDanger.slice(0,12);
-    const more=allDanger.length-shown.length;
+    const allDanger=b.dangerous_casts;
+    // Tank busters (single-target hits the tank eats) are flagged via Method.gg's
+    // tank-buster tag, matched by ability name. Hidden by default — they chunk the
+    // tank, not the raid, so they're noise in the "what nearly wiped us" list.
+    const tbSet=new Set((b.guide_abilities||[]).filter(g=>(g.tags||[]).includes('tank-buster'))
+      .map(g=>(g.ability||'').toLowerCase()));
+    allDanger.forEach(c=>{c._tb=tbSet.has((c.ability||'').toLowerCase());});
+    const tbCount=allDanger.filter(c=>c._tb).length;
     const dm=b.danger_meta||{};
     let src='';
     if(b.danger_source==='public'){
       const ks=dm.key_levels||[]; const kr=ks.length?(ks.length===1?`+${ks[0]}`:`+${ks[0]}–+${ks[ks.length-1]}`):'';
       src=` <span class="muted" style="font-weight:normal">· estimated from ${dm.n_logs||0} public log(s)${kr?` (${kr}, median)`:''} — no run of your own yet</span>`;
     }
-    topBox.append(el(`<h3 class="muted" style="margin:6px 0 6px">💥 Most dangerous casts — these chunk or one-shot${more>0?` <span class="muted" style="font-weight:normal">(top 12 of ${allDanger.length})</span>`:''}${src}</h3>`));
+    const h3=el(`<h3 class="muted" style="margin:6px 0 6px"></h3>`);
+    topBox.append(h3);
+    let showTb=false;
+    if(tbCount){
+      const wrap=el(`<label class="muted" style="cursor:pointer;display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:0 0 6px"><input type="checkbox"> Show tank busters (${tbCount})</label>`);
+      wrap.querySelector('input').addEventListener('change',e=>{showTb=e.target.checked;render();});
+      topBox.append(wrap);
+    }
     const dtbl=el('<table><thead><tr><th>Cast</th><th>Mobs</th><th>Damage</th><th>Type</th></tr></thead><tbody></tbody></table>');
     const db=dtbl.querySelector('tbody');
-    shown.forEach(c=>{
-      const parts=[];
-      if(c.is_aoe) parts.push(`<span class="av-yes">${Math.round(c.aoe_pct*100)}% party HP</span> (${c.aoe_targets} hit)`);
-      if(c.is_spike) parts.push(`<span class="av-yes">${Math.round(c.burst_pct*100)}%</span> of one player${c.burst_s?(' in '+c.burst_s+'s'):''}`);
-      const type=c.kind==='both'?'AoE + spike':(c.kind==='aoe'?'AoE':'spike');
-      db.append(el(`<tr><td>${spellLink(c.ability, c.ability_id)}</td>
-        <td class="contrib">${esc((c.mobs||[]).join(', '))}</td>
-        <td>${parts.join(' · ')}</td><td class="muted">${type}</td></tr>`));
-    });
+    const render=()=>{
+      const list=allDanger.filter(c=>showTb||!c._tb);
+      const shown=list.slice(0,12);
+      const more=list.length-shown.length;
+      const hidden=showTb?0:tbCount;
+      h3.innerHTML=`💥 Most dangerous casts — these chunk or one-shot`
+        +(more>0?` <span class="muted" style="font-weight:normal">(top 12 of ${list.length})</span>`:'')
+        +(hidden?` <span class="muted" style="font-weight:normal">· ${hidden} tank buster${hidden>1?'s':''} hidden</span>`:'')+src;
+      db.innerHTML='';
+      shown.forEach(c=>{
+        const parts=[];
+        if(c.is_aoe) parts.push(`<span class="av-yes">${Math.round(c.aoe_pct*100)}% party HP</span> (${c.aoe_targets} hit)`);
+        if(c.is_spike) parts.push(`<span class="av-yes">${Math.round(c.burst_pct*100)}%</span> of one player${c.burst_s?(' in '+c.burst_s+'s'):''}`);
+        const type=(c.kind==='both'?'AoE + spike':(c.kind==='aoe'?'AoE':'spike'))+(c._tb?' · 🛡️ tank buster':'');
+        db.append(el(`<tr><td>${spellLink(c.ability, c.ability_id)}</td>
+          <td class="contrib">${esc((c.mobs||[]).join(', '))}</td>
+          <td>${parts.join(' · ')}</td><td class="muted">${type}</td></tr>`));
+      });
+    };
     topBox.append(dtbl);
+    render();
   }
   // ---- Method.gg guide flags (qualitative; covers un-logged dungeons too) ----
   const GTAG={interrupt:'🛑 interrupt','stop (CC)':'💫 stop','tank buster':'🛡️ tank buster',
@@ -872,22 +896,45 @@ function renderBriefing(){
   const GORDER=['interrupt','stop (CC)','tank buster','frontal','avoid','line of sight','CC on you','party damage','adds','important'];
   const GLABEL={interrupt:'interrupt',stop:'stop (CC)','tank-buster':'tank buster',frontal:'frontal',
     avoid:'avoid',los:'line of sight','cc-effect':'CC on you','party-dam':'party damage','add-spawn':'adds',important:'important'};
+  // Which roles need to act on each raw Method.gg tag. Unmapped tags fall back to all roles.
+  const GROLES={interrupt:['tank','dps'],stop:['tank','dps'],'tank-buster':['tank'],
+    frontal:['tank','dps'],avoid:['tank','healer','dps'],los:['tank','healer','dps'],
+    'cc-effect':['tank','healer','dps'],'party-dam':['healer'],'add-spawn':['tank','dps'],
+    important:['tank','healer','dps']};
   const ga=b.guide_abilities||[];
   if(ga.length){
     const labels=(tags)=>GORDER.filter(L=>(tags||[]).some(t=>GLABEL[t]===L));
     const prio=(a)=>{const ls=labels(a.tags);return ls.length?GORDER.indexOf(ls[0]):99;};
+    const rowRoles=(tags)=>{const s=new Set();(tags||[]).forEach(t=>(GROLES[t]||['tank','healer','dps']).forEach(r=>s.add(r)));
+      return s.size?s:new Set(['tank','healer','dps']);};
     const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
     const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
     topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 What the guides flag <span class="muted" style="font-weight:normal">· Method.gg</span>${src}</h3>`));
+    // Role filter — toggle which roles' mechanics are shown (all on by default).
+    const checked=new Set(['tank','healer','dps']);
+    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show for:</span></div>`);
     const gtbl=el('<table><thead><tr><th>Ability</th><th>Mob</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
     const gb=gtbl.querySelector('tbody');
-    sorted.slice(0,18).forEach(a=>{
+    const trs=[];
+    sorted.forEach(a=>{
       const pills=labels(a.tags).map(L=>`<span class="pill b-other">${GTAG[L]||esc(L)}</span>`).join(' ');
-      gb.append(el(`<tr><td>${spellLink(a.ability, a.spell_id)}</td><td class="muted">${esc(a.mob)}</td>
-        <td${a.note?` title="${esc(a.note)}"`:''}>${pills}</td></tr>`));
+      const tr=el(`<tr><td>${spellLink(a.ability, a.spell_id)}</td><td class="muted">${esc(a.mob)}</td>
+        <td${a.note?` title="${esc(a.note)}"`:''}>${pills}</td></tr>`);
+      tr._roles=rowRoles(a.tags);
+      gb.append(tr); trs.push(tr);
     });
-    topBox.append(gtbl);
-    if(sorted.length>18) topBox.append(el(`<div class="muted" style="font-size:11px">+${sorted.length-18} more — see the full tracker.</div>`));
+    const apply=()=>{let shown=0;trs.forEach(tr=>{const vis=[...tr._roles].some(r=>checked.has(r));
+      tr.style.display=vis?'':'none';if(vis)shown++;});
+      empty.style.display=shown?'none':'';};
+    [['tank','🛡️ Tank'],['healer','💚 Healer'],['dps','⚔️ DPS']].forEach(([key,lab])=>{
+      const wrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox" checked> ${lab}</label>`);
+      wrap.querySelector('input').addEventListener('change',e=>{e.target.checked?checked.add(key):checked.delete(key);apply();});
+      ctrl.append(wrap);
+    });
+    topBox.append(ctrl); topBox.append(gtbl);
+    const empty=el(`<div class="muted" style="font-size:11px;display:none">No abilities for the selected role(s).</div>`);
+    topBox.append(empty);
+    apply();
   }
   if(rt){
     // off-route mobs

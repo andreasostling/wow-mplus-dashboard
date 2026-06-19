@@ -54,9 +54,10 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
             for sid in f["interruptible"]:
                 if sid not in spell_names:
                     need.add(sid)
-            for sid in f["spells"]:
-                if sid not in f["interruptible"] and spell_cats.get(sid) in ("cc", "stun") and sid not in spell_names:
-                    need.add(sid)
+            if not f.get("is_boss"):
+                for sid in f["spells"]:
+                    if sid not in f["interruptible"] and spell_cats.get(sid) in ("cc", "stun") and sid not in spell_names:
+                        need.add(sid)
     for sid in need:
         nm = fetch.resolve_ability_name(client, sid)
         if nm:
@@ -79,7 +80,8 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
                 entry["threats"].append({"mob": mob, "npc_id": nid,
                                          "spells": [p["name"] for p in pairs], "spell_pairs": pairs})
             # Non-interruptible spells categorized as cc/stun — need to be stopped via stun/CC.
-            stop_spells = [
+            # Bosses are immune to stun/CC, so they never belong in the stop list.
+            stop_spells = [] if f.get("is_boss") else [
                 (s, spell_cats[s]) for s in f["spells"]
                 if s not in f["interruptible"] and spell_cats.get(s) in ("cc", "stun")
             ]
