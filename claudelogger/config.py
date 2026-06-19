@@ -74,6 +74,15 @@ class Knobs:
     pull_gap_ms: int = 6000
     pull_min_ms: int = 1500
 
+    # Cooldown economy: a major offensive CD whose actual casts are below this
+    # fraction of its theoretical max uses (combat_time / cooldown) is flagged as
+    # under-used ("held"). Defensives get a separate, looser gate.
+    cd_low_usage_frac: float = 0.6
+    defensive_low_usage_frac: float = 0.5
+    # A pull gap longer than this many seconds counts as real downtime in the
+    # time-loss breakdown (shorter gaps are just pull-to-pull travel noise).
+    downtime_gap_s: float = 8.0
+
     # Wipe detection: deaths within wipe_gap_ms chain into one combat cluster; a
     # cluster killing >= wipe_min_players distinct members is a wipe. Keep the first
     # wipe_keep deaths (the trigger); tag the rest as cascade (excluded from cause stats).

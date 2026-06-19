@@ -10,11 +10,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import combatlog
 from .classify import AVOIDABLE_BUCKETS, INTERRUPT, STUN, DeathFinding
 from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
-def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pulls=None, fixate_mobs=None) -> dict[str, Any]:
+def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pulls=None,
+              fixate_mobs=None, timing=None, cd_economy=None) -> dict[str, Any]:
     return {
         "report": rep_code,
         "dungeon": fight.name,
@@ -27,6 +29,8 @@ def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pul
         "pulls": pulls or [],
         "fixate_mobs": fixate_mobs or [],
         "deaths": [f.to_dict() for f in findings],
+        "timing": timing or {},
+        "cd_economy": cd_economy or {},
     }
 
 
@@ -77,6 +81,13 @@ def build_season(runs: list[dict[str, Any]]) -> dict[str, Any]:
     interrupt_pref_deaths = sum(1 for d in all_deaths if d["bucket"] == INTERRUPT)
     verdict = _stun_verdict(runs, stun_pref_deaths, interrupt_pref_deaths, total)
 
+    # Timing rollup across runs that have it (timer match + downtime).
+    timings = [r.get("timing") or {} for r in runs]
+    with_timer = [t for t in timings if t.get("timer_s")]
+    runs_timed = sum(1 for t in with_timer if t.get("on_time") is True)
+    downtimes = [t["downtime_pct"] for t in timings if t.get("downtime_pct") is not None]
+    avg_downtime_pct = round(sum(downtimes) / len(downtimes), 1) if downtimes else None
+
     return {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "runs_analyzed": len(runs),
@@ -100,6 +111,9 @@ def build_season(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "pulls_cc_starved": len(starved_pulls),
         "top_leaked_casts": leak_by_mob.most_common(12),
         "stun_verdict": verdict,
+        "runs_with_timer": len(with_timer),
+        "runs_timed": runs_timed,
+        "avg_downtime_pct": avg_downtime_pct,
     }
 
 
@@ -155,7 +169,8 @@ def _counter_for(t: dict) -> tuple[str, str, str]:
     return "Defensive / position", "other", "Non-interruptible mechanic — defensive cooldown or pre-positioning."
 
 
-def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = None) -> dict[str, Any]:
+def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = None,
+                            log_positions: dict | None = None) -> dict[str, Any]:
     by_dungeon: dict[str, list[dict]] = defaultdict(list)
     for r in runs:
         by_dungeon[r["dungeon"]].append(r)
@@ -250,7 +265,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         }
 
     if route_info:
-        _merge_route_info(out, route_info, by_dungeon)
+        _merge_route_info(out, route_info, by_dungeon, log_positions)
     # Route-only dungeons (no logged runs) get empty comp lists from _empty_briefing —
     # backfill them with the comp's spec-based kit so "Your CC" is never blank.
     for b in out.values():
@@ -269,7 +284,8 @@ def _empty_briefing(name: str) -> dict[str, Any]:
 
 
 def _merge_route_info(out: dict[str, Any], route_info: list[dict],
-                      by_dungeon: dict[str, list[dict]] | None = None) -> None:
+                      by_dungeon: dict[str, list[dict]] | None = None,
+                      log_positions: dict | None = None) -> None:
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     bnorms = {d: norm(d) for d in out}
     for r in route_info:
@@ -317,6 +333,37 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped.append(o)
+
+        # Exact positions from the local advanced combat log (if available). The log is
+        # a *more complete* source of what was pulled than WCL's per-pull npc list (which
+        # often misses mobs), so we both enrich WCL-detected off-route mobs AND add
+        # log-only ones. Each off-route mob gets world coords + the nearest ON-route mob
+        # (same coordinate space → no map transform needed). Matched by dungeon name.
+        if log_positions and route_npc_set:
+            posmap = next((v for k, v in log_positions.items() if norm(k) == norm(match)), None)
+            if posmap:
+                located = combatlog.locate_off_route(posmap, route_npc_set)
+                seen_npc = set()
+                for o in deduped:
+                    seen_npc.add(o["npc_id"])
+                    e = located.get(o["npc_id"])
+                    if e:
+                        o["pos"] = {k: e[k] for k in ("x", "y", "map_id", "near", "near_yd", "spawns")}
+                # Log-only off-route mobs WCL didn't record (skip single-tick blips).
+                for nid, e in sorted(located.items(), key=lambda kv: -kv[1]["events"]):
+                    if nid in seen_npc or e["events"] < 2:
+                        continue
+                    deduped.append({
+                        "npc_id": nid, "mob": e["name"] or f"NPC #{nid}", "pull": None,
+                        "time_s": None, "source": "combatlog",
+                        "pos": {k: e[k] for k in ("x", "y", "map_id", "near", "near_yd", "spawns")},
+                    })
+
+        # Drop routine mob-spawned adds (Mana Battery, Smudge) and non-pull objects
+        # (Broken Pipe, pylons, tripwires) — neither is an extra pull. Matched by name
+        # (these carry multiple npc_ids). Failure-adds (e.g. Dreadflail) are kept.
+        deduped = [o for o in deduped
+                   if (o.get("mob") or "").strip().lower() not in combatlog.IGNORED_OFF_ROUTE_NAMES]
 
         out[match]["route"] = {
             "label": r["label"], "code": r["code"], "pulls": r.get("pulls", 0),
@@ -497,6 +544,13 @@ _HTML = r"""<!doctype html>
   .pull-bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:14px;overflow:hidden;position:relative}
   .pull-bar .fill{height:100%;min-width:2px}
   .fill-trash{background:var(--accent)} .fill-boss{background:var(--bad)}
+  .gapbar{display:grid;grid-template-columns:150px 1fr 150px;gap:8px;align-items:center;margin:3px 0}
+  .gapbar .track{position:relative;background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
+  .gapbar .ceil{position:absolute;inset:0;background:#1d2530}
+  .gapbar .act{position:absolute;left:0;top:0;bottom:0;background:var(--accent);min-width:2px}
+  .cde{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;align-items:start}
+  .cde h4{margin:0 0 6px;font-size:13px} .cde .role{color:var(--mut);font-weight:400;font-size:11px}
+  .low{color:var(--bad)} .ok-use{color:var(--ok)}
 </style></head>
 <body><div class="wrap">
   <h1>ClaudeLogger — Mythic+ Death Analysis</h1>
@@ -515,6 +569,10 @@ _HTML = r"""<!doctype html>
 
   <h2>Interruptible casts that leaked (pull-level)</h2>
   <div class="bars" id="leaked"></div>
+
+  <h2>Run debrief — time, DPS &amp; cooldowns</h2>
+  <div class="controls"><select id="fRun"></select></div>
+  <div id="run-debrief"></div>
 
   <div id="simc-section" style="display:none">
   <h2>SimC — DPS by dungeon</h2>
@@ -663,17 +721,27 @@ function renderBriefing(){
       // Aggregate: count how many pulls each mob appeared in.
       const mobPulls = {};
       offRoute.forEach(o => {
-        if(!mobPulls[o.mob]) mobPulls[o.mob] = {npc_id:o.npc_id, pulls:[]};
-        mobPulls[o.mob].pulls.push(o.pull);
+        if(!mobPulls[o.mob]) mobPulls[o.mob] = {npc_id:o.npc_id, pulls:[], pos:o.pos};
+        if(o.pull!=null) mobPulls[o.mob].pulls.push(o.pull);
+        if(o.pos) mobPulls[o.mob].pos = o.pos;
       });
       const sorted = Object.entries(mobPulls).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
+      const anyPos = sorted.some(([,i])=>i.pos);
       box.append(el(`<h3 class="muted" style="margin:16px 0 6px">⚠️ Off-route mobs — pulled but not on your planned route</h3>`));
-      const otbl=el('<table><thead><tr><th>Mob</th><th>Pull #(s)</th><th>Wowhead</th></tr></thead><tbody></tbody></table>');
+      if(anyPos) box.append(el('<div class="contrib" style="margin:-2px 0 6px">Exact spawn location from your local combat log — located relative to the nearest on-route mob.</div>'));
+      const otbl=el(`<table><thead><tr><th>Mob</th><th>Pull #(s)</th>${anyPos?'<th>Where (from combat log)</th>':''}<th>Wowhead</th></tr></thead><tbody></tbody></table>`);
       const ob=otbl.querySelector('tbody');
       sorted.forEach(([mob, info])=>{
-        const pullNums = info.pulls.map(p=>`#${p}`).join(', ');
+        const pullNums = info.pulls.length ? info.pulls.map(p=>`#${p}`).join(', ') : '<span class="muted">log</span>';
         const whLink = `<a href="https://www.wowhead.com/npc=${info.npc_id}" target="_blank" rel="noopener">map ↗</a>`;
-        ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td><td>${whLink}</td></tr>`));
+        let where = '<span class="muted">—</span>';
+        if(info.pos){
+          const p = info.pos;
+          const nearTxt = p.near ? `~${p.near_yd} yd from <b>${esc(p.near)}</b>` : 'no on-route anchor';
+          where = `<span title="world (${p.x}, ${p.y}) · uiMap ${p.map_id} · ${p.spawns} spawn(s) engaged">${nearTxt} <span class="muted">(${p.x}, ${p.y})</span></span>`;
+        }
+        const posCell = anyPos ? `<td class="contrib">${where}</td>` : '';
+        ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td>${posCell}<td>${whLink}</td></tr>`));
       });
       box.append(otbl);
     }
@@ -780,6 +848,121 @@ const fDungeonSel = document.getElementById('fDungeon');
 fDungeonSel.onchange = ()=>{ render(); syncDungeon(fDungeonSel.value, fDungeonSel); };
 registerDungeonSelect(fDungeonSel, render);
 render();
+
+// ---- Run debrief: time-loss, actual-vs-ceiling DPS, cooldown economy ----
+(function(){
+  const fmtMin = (s)=>{s=Math.max(0,Math.round(s||0));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;};
+  const rsel = document.getElementById('fRun');
+  // Sim ceiling lookup by normalized dungeon + player (only if SimC data is present).
+  const simLookup = {}; const SIMC = DATA.simc;
+  if(SIMC && SIMC.sim_results && SIMC.sim_results.by_dungeon){
+    for(const [dn, ds] of Object.entries(SIMC.sim_results.by_dungeon)){
+      const k = dnorm(dn); simLookup[k] = simLookup[k] || {};
+      (ds.players||[]).forEach(p=>{ simLookup[k][p.player] = p.dps; });
+    }
+  }
+  const debriefRuns = RUNS.map((r,i)=>({r,i})).filter(x=>x.r.timing && Object.keys(x.r.timing).length);
+  if(!debriefRuns.length){
+    document.getElementById('run-debrief').innerHTML='<div class="muted">No run timing data — re-run the analysis.</div>';
+    rsel.style.display='none'; return;
+  }
+  debriefRuns.forEach(({r,i})=>{
+    const d = r.date_ms? new Date(r.date_ms).toISOString().slice(0,10):'';
+    rsel.append(el(`<option value="${i}">${esc(r.dungeon)} +${r.key_level}${d?(' · '+d):''}</option>`));
+  });
+
+  function renderRun(){
+    const r = RUNS[+rsel.value]; const box = document.getElementById('run-debrief'); box.innerHTML='';
+    if(!r) return;
+    const t = r.timing||{};
+    // A: where the time went
+    const marginTxt = t.timer_s ? `${t.margin_s>=0?'+':''}${Math.round(t.margin_s)}s` : 'no timer';
+    const mClass = !t.timer_s?'muted':t.margin_s<0?'av-yes':t.margin_s<120?'lever':'av-no';
+    box.append(el('<h3 class="muted" style="margin:6px 0 6px">⏱️ Where the time went</h3>'));
+    const cards = [['Duration', fmtMin(t.run_duration_s)], ['Timer', t.timer_s?fmtMin(t.timer_s):'—'],
+      ['Margin', `<span class="${mClass}">${marginTxt}</span>`],
+      ['Downtime', `${Math.round(t.downtime_s)}s (${t.downtime_pct}%)`],
+      ['Deaths cost', `${t.death_cost_s}s`], ['Recovery', `${Math.round(t.recovery_s||0)}s`]];
+    const cw = el('<div class="brief-cards"></div>');
+    cards.forEach(([l,n])=>cw.append(el(`<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`)));
+    box.append(cw);
+    if(t.timer_s && t.margin_s<0 && t.death_cost_s>0){
+      const deathless = t.timer_s - (t.run_duration_s - t.death_cost_s);
+      box.append(el(`<div class="verdict">Over timer by ${Math.round(-t.margin_s)}s. Deaths cost ${t.death_cost_s}s against the clock — `
+        + (deathless>=0?'<b>a clean run at this pace would have timed.</b>':'even deathless it would have been short.')+'</div>'));
+    }
+    const pulls = t.pulls||[];
+    if(pulls.length){
+      box.append(el('<h3 class="muted" style="margin:12px 0 6px">📊 Pull timeline (combat · idle after)</h3>'));
+      const maxDur = Math.max(1,...pulls.map(p=>p.duration_s));
+      pulls.forEach(p=>{
+        const cls = p.is_boss?'fill-boss':'fill-trash';
+        const dt = p.downtime_after_s>=8?` <span class="muted">+${Math.round(p.downtime_after_s)}s idle</span>`:'';
+        const dth = p.deaths?` <span class="av-yes">☠${p.deaths}</span>`:'';
+        box.append(el(`<div class="pull-bar"><span class="muted">#${p.pull}</span>
+          <span class="track"><span class="fill ${cls}" style="width:${Math.round(100*p.duration_s/maxDur)}%" title="${p.distinct_mobs} mobs"></span></span>
+          <span class="muted" style="font-size:11px">${Math.round(p.duration_s)}s${dth}${dt}</span></div>`));
+      });
+    }
+    if((t.boss_times||[]).length)
+      box.append(el('<div class="contrib" style="margin-top:6px">Boss combat time: '+t.boss_times.map(b=>`${esc(b.name)} ${fmtMin(b.duration_s)}${b.segments>1?` <span class="muted">(${b.segments} phases)</span>`:''}`).join(' · ')+'</div>'));
+    box.append(el(`<div class="contrib" style="margin-top:4px">${esc(t.forces_note||'')}</div>`));
+
+    // B: DPS actual vs ceiling
+    const dps = t.dps_actual||{}; const names = Object.keys(dps);
+    if(names.length){
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs SimC ceiling</h3>'));
+      const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
+      let scaleMax = 1; names.forEach(n=>{ scaleMax=Math.max(scaleMax, dps[n].run_dps, sims[n]||0); });
+      names.sort((a,b)=>dps[b].run_dps-dps[a].run_dps).forEach(n=>{
+        const a = dps[n], ceil = sims[n]||0;
+        const roleTag = a.role==='tank'?' 🛡️':a.role==='healer'?' 💚':'';
+        const gap = (haveSim && ceil>0)? Math.round(100*a.run_dps/ceil) : null;
+        const gapTxt = gap!==null? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${gap}% of ceil</span>` : `${Math.round(a.run_dps).toLocaleString()}`;
+        const ceilW = haveSim&&ceil>0? Math.round(100*ceil/scaleMax):0; const actW = Math.round(100*a.run_dps/scaleMax);
+        box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
+          <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span></span>
+          <span class="muted" style="font-size:12px">${gapTxt}</span></div>`));
+      });
+      if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling and see the gap%.</div>'));
+    }
+
+    // C: cooldown economy
+    const ce = r.cd_economy||{};
+    if((ce.players||[]).length){
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🧊 Cooldown economy — used vs available</h3>'));
+      const grid = el('<div class="cde"></div>');
+      ce.players.forEach(p=>{
+        if(!p.offensive.length && !p.defensive.length) return;
+        const cdRows = (arr)=>arr.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.seen?(c.used+'× · '+c.per_min+'/min'):'—'}</td>
+          <td class="${!c.seen?'muted':c.low?'low':'ok-use'}">${!c.seen?'not seen':c.low?('under-used '+c.usage_pct+'%'):'✓ on CD'}</td></tr>`).join('');
+        const defRows = (arr)=>arr.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.used}×</td></tr>`).join('');
+        let h = `<div><h4>${esc(p.name)} <span class="role">${esc(p.spec||p.class)} · ${esc(p.role)}</span></h4>`;
+        if(p.offensive.length) h += `<table class="kv"><thead><tr><th>Offensive CD</th><th>cadence</th><th></th></tr></thead><tbody>${cdRows(p.offensive)}</tbody></table>`;
+        if(p.defensive.length) h += `<table class="kv" style="margin-top:6px"><thead><tr><th>Defensive used</th><th>×</th></tr></thead><tbody>${defRows(p.defensive)}</tbody></table>`;
+        if(p.deaths_def_available_unused) h += `<div class="contrib" style="margin-top:4px"><span class="av-yes">${p.deaths_def_available_unused}</span> death(s) with a defensive up &amp; unused${p.deaths_def_would_save?` (${p.deaths_def_would_save} would have saved)`:''}.</div>`;
+        grid.append(el(h+'</div>'));
+      });
+      box.append(grid);
+      const ex = ce.externals||{};
+      if((ex.given||[]).length){
+        box.append(el('<h3 class="muted" style="margin:14px 0 6px">🤝 External defensives (who → whom)</h3>'));
+        const etbl = el('<table><thead><tr><th>Caster</th><th>On</th><th>Ability</th><th>×</th></tr></thead><tbody></tbody></table>');
+        const eb = etbl.querySelector('tbody');
+        ex.given.forEach(g=>eb.append(el(`<tr><td>${esc(g.caster)}</td><td>${esc(g.recipient)}</td><td>${esc(g.ability)}</td><td>${g.count}</td></tr>`)));
+        box.append(etbl);
+      }
+      const bm = ce.brewmaster;
+      if(bm){
+        const sh = bm.shuffle_uptime_pct!==null? `, Shuffle uptime ${bm.shuffle_uptime_pct}%`:'';
+        box.append(el(`<div class="verdict" style="margin-top:12px"><b>🍺 ${esc(bm.player)} mitigation:</b>
+          Purifying Brew ${bm.purifying_brew_casts}× (${bm.purify_per_min}/min), ${bm.stagger_share_pct}% of damage taken came through Stagger${sh}.</div>`));
+      }
+    }
+  }
+  rsel.onchange = renderRun;
+  renderRun();
+})();
 
 // ---- SimC + Route Analysis section ----
 (function(){

@@ -251,6 +251,88 @@ def fetch_healer_mana(client: WCLClient, code: str, fight: Fight, healer_id: int
     return sorted((t, a, m) for t, (a, m) in by_ts.items())
 
 
+# Damage-done is fetched as a server-side aggregate (the `table` field) rather than
+# the full Damage event stream — a 30-min M+ run is 100k+ damage events, but the
+# table returns one row per source with total + active time. This is the actual-DPS
+# side of "actual vs simmed potential".
+_DAMAGE_TABLE_Q = """
+query ($code: String!, $fightID: Int!, $startTime: Float!, $endTime: Float!) {
+  reportData { report(code: $code) {
+    table(fightIDs: [$fightID], dataType: DamageDone, startTime: $startTime, endTime: $endTime)
+  } }
+}
+"""
+
+
+def fetch_damage_done(client: WCLClient, code: str, fight: Fight) -> dict[int, dict[str, int]]:
+    """Per-player damage done for a fight: {actor_id: {"total": int, "active_ms": int}}.
+
+    Uses the WCL `table` aggregate (cheap) instead of the Damage event stream. Pet
+    damage is folded into the owning player (entries carry `petOwner` when the row is
+    a pet). `total` is effective damage; `activeTime` is ms the source was in combat.
+    """
+    res = client.query(
+        _DAMAGE_TABLE_Q,
+        {"code": code, "fightID": fight.id,
+         "startTime": float(fight.start_time), "endTime": float(fight.end_time)},
+    )
+    table = res["data"]["reportData"]["report"].get("table") or {}
+    # The table scalar is the parsed JSON object; entries live under data.entries.
+    entries = ((table.get("data") or {}).get("entries")) or table.get("entries") or []
+    out: dict[int, dict[str, int]] = {}
+    for e in entries:
+        owner = e.get("petOwner") or e.get("id")
+        if owner is None:
+            continue
+        slot = out.setdefault(int(owner), {"total": 0, "active_ms": 0})
+        slot["total"] += int(e.get("total", 0) or 0)
+        # A pet's active time shouldn't extend the owner's; keep the max seen.
+        slot["active_ms"] = max(slot["active_ms"], int(e.get("activeTime", 0) or 0))
+    return out
+
+
+# Targeted buff fetch (one player, a small aura allow-list) for tank mitigation uptime
+# — e.g. Brewmaster Shuffle. Self-buffs have sourceID == the player, which keeps the
+# payload tiny vs. pulling the whole Buffs stream for every fight.
+_BUFFS_Q = """
+query ($code: String!, $fightID: Int!, $sid: Int!, $startTime: Float!, $endTime: Float!) {
+  reportData { report(code: $code) {
+    events(fightIDs: [$fightID], dataType: Buffs, sourceID: $sid,
+           startTime: $startTime, endTime: $endTime, limit: 10000) {
+      data nextPageTimestamp
+    }
+  } }
+}
+"""
+
+
+def fetch_buffs(client: WCLClient, code: str, fight: Fight, player_id: int,
+                aura_ids: set[int] | None = None) -> list[dict[str, Any]]:
+    """Buff apply/remove events the player applied to themselves, optionally filtered
+    to an aura allow-list. Returned ascending by timestamp."""
+    out: list[dict[str, Any]] = []
+    cursor = float(fight.start_time)
+    end = float(fight.end_time)
+    for _ in range(200):
+        res = client.query(
+            _BUFFS_Q,
+            {"code": code, "fightID": fight.id, "sid": player_id,
+             "startTime": cursor, "endTime": end},
+        )
+        block = res["data"]["reportData"]["report"]["events"]
+        for e in block.get("data") or []:
+            if e.get("targetID") != player_id:
+                continue
+            if aura_ids and e.get("abilityGameID") not in aura_ids:
+                continue
+            out.append(e)
+        nxt = block.get("nextPageTimestamp")
+        if not nxt or nxt <= cursor:
+            break
+        cursor = float(nxt)
+    return sorted(out, key=lambda e: e["timestamp"])
+
+
 def get_roles(client: WCLClient, code: str, fight_id: int) -> dict[int, tuple[str, str]]:
     """Return {actor_id: (role, spec)} from playerDetails. role in tank|healer|dps."""
     res = client.query(_ROLES_Q, {"code": code, "fight": fight_id})
