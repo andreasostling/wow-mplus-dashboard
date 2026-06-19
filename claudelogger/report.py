@@ -680,9 +680,9 @@ _HTML = r"""<!doctype html>
   <h2>SimC — DPS by dungeon</h2>
   <div class="controls"><select id="fSimcDungeon"><option value="">All dungeons</option></select></div>
   <table id="simc-dps"><thead><tr>
-    <th>Dungeon</th><th>Player</th><th>Spec</th><th>SimC DPS</th><th>+12 field (typical · best)</th><th>Sim vs typical</th><th>Role</th>
+    <th>Dungeon</th><th>Player</th><th>Spec</th><th>Our DPS (SimC)</th><th>Top +12 log</th><th>Ours vs top</th><th>Role</th>
   </tr></thead><tbody></tbody></table>
-  <div class="contrib" style="margin-top:4px">“+12 field” = real WCL +12 logs for that spec (better-geared than us). “Sim vs typical” is the SimC DPS as a % of the typical logger, plus a <b>realism flag</b>: the percentile the sim lands at in that real field. The field out-gears us, so <b>above ~p90 = the sim is implausibly high (optimistic)</b>; below the field is usually just a gear gap, not a conservative sim.</div>
+  <div class="contrib" style="margin-top:4px">“Top +12 log” = the best real WCL +12 parse for that spec (those players out-gear us, so it’s an aspirational ceiling, not a fair-gear target). The bar shows our simmed DPS against that top parse. ⚠ = our sim sits above ~p90 of the real field — likely optimistic for this spec (hover for the typical-logger number).</div>
 
   <h2>Route analysis</h2>
   <div class="controls"><select id="fRouteDungeon"></select></div>
@@ -1176,22 +1176,19 @@ function renderSimcDps(){
       // SimC profile role is "attack"/"spell" for damage specs; show it as "dps".
       const roleLabel = p.role==='tank'?'tank':p.role==='heal'?'heal':'dps';
       // Real top-player DPS at +12 (best · median of top 20), and where the sim sits vs it.
-      let bench='<span class="muted">—</span>', vs='<span class="muted">—</span>';
+      // Headline comparison: our simmed DPS vs the top real +12 log for the spec.
+      let topCell='<span class="muted">—</span>', vs='<span class="muted">—</span>';
       if(p.top12_best){
-        const k=p.top12_key||12;
-        bench=`<span title="field median and best of real +${k} ${esc(p.spec)} logs (n=${p.top12_n||0})">${Math.round(p.top12_typical/1000)}k · ${Math.round(p.top12_best/1000)}k</span>`;
-        if(p.top12_typical){ const pct=Math.round(100*p.dps/p.top12_typical);
-          // realism flag: where the sim sits in the (better-geared) real +12 field.
-          const RM={optimistic:['⚠ p'+p.sim_pctile+' — sim likely high','low'],
-                    plausible:['✓ p'+p.sim_pctile+' — plausible','ok-use'],
-                    below_field:['p'+p.sim_pctile+' — below field (gear)','muted']};
-          const rm=RM[p.sim_realism]||['',''];
-          vs=`<span class="${pct>=100?'ok-use':pct>=85?'lever':'low'}">${pct}% of typical</span>`
-             + (rm[0]?` <span class="${rm[1]}" style="font-size:11px" title="sim DPS is at the ${p.sim_pctile}th percentile of real +${k} logs for this spec; the field is better-geared, so above ~p90 flags an optimistic sim, while below-field is usually just a gear gap">${rm[0]}</span>`:'');
-        }
+        const k=p.top12_key||12, top=p.top12_best;
+        topCell=`<span title="best (#1) real +${k} ${esc(p.spec)} parse · typical logger ${Math.round((p.top12_typical||0)/1000)}k · n=${p.top12_n||0}">${Math.round(top/1000)}k</span>`;
+        const pct=Math.round(100*p.dps/top);
+        const w=Math.max(2,Math.min(100,pct));
+        const cls=pct>=95?'ok-use':pct>=80?'lever':'low';
+        const hot=p.sim_realism==='optimistic'?` <span class="low" title="our sim is at the ${p.sim_pctile}th percentile of the real +${k} field — likely optimistic for this spec">⚠</span>`:'';
+        vs=`<span style="display:inline-block;width:90px;height:11px;background:var(--card);border:1px solid var(--line);border-radius:4px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:var(--accent)"></span></span> <span class="${cls}">${pct}%</span>${hot}`;
       }
       tb.append(el(`<tr><td>${esc(d)}</td><td>${esc(p.player)}</td><td>${esc(p.spec)}</td>
-        <td>${Math.round(p.dps).toLocaleString()}</td><td>${bench}</td><td>${vs}</td>
+        <td>${Math.round(p.dps).toLocaleString()}</td><td>${topCell}</td><td>${vs}</td>
         <td>${esc(roleLabel)}${roleTag}</td></tr>`));
     });
     if(!fd){
