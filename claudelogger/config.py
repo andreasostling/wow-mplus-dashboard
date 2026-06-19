@@ -79,6 +79,11 @@ class Knobs:
     # under-used ("held"). Defensives get a separate, looser gate.
     cd_low_usage_frac: float = 0.6
     defensive_low_usage_frac: float = 0.5
+    # "Missed uses" estimate (idle-ready time ÷ base CD, from actual cast timestamps)
+    # is only meaningful for long "press-on-cooldown" burst CDs. Shorter CDs are
+    # rotational / resource-gated (combo points, energy), where the cooldown isn't the
+    # binding constraint, so we don't estimate misses for them.
+    cd_missed_min_cd_s: float = 45.0
     # A pull gap longer than this many seconds counts as real downtime in the
     # time-loss breakdown (shorter gaps are just pull-to-pull travel noise).
     downtime_gap_s: float = 8.0

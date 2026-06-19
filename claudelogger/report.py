@@ -1113,22 +1113,6 @@ render();
       box.append(el(`<div class="verdict">Over timer by ${Math.round(-t.margin_s)}s. Deaths cost ${t.death_cost_s}s against the clock — `
         + (deathless>=0?'<b>a clean run at this pace would have timed.</b>':'even deathless it would have been short.')+'</div>'));
     }
-    const pulls = t.pulls||[];
-    if(pulls.length){
-      box.append(el('<h3 class="muted" style="margin:12px 0 6px">📊 Pull timeline (combat · group DPS · idle after)</h3>'));
-      const maxDur = Math.max(1,...pulls.map(p=>p.duration_s));
-      pulls.forEach(p=>{
-        const cls = p.is_boss?'fill-boss':'fill-trash';
-        const dt = p.downtime_after_s>=8?` <span class="muted">+${Math.round(p.downtime_after_s)}s idle</span>`:'';
-        const dth = p.deaths?` <span class="av-yes">☠${p.deaths}</span>`:'';
-        const byP = p.dps_by_player||{};
-        const dpsTitle = Object.entries(byP).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`${esc(n)}: ${Math.round(v/1000)}k`).join('\n');
-        const dps = p.group_dps?` <span title="${dpsTitle}">· ${Math.round(p.group_dps/1000)}k dps</span>`:'';
-        box.append(el(`<div class="pull-bar"><span class="muted">#${p.pull}</span>
-          <span class="track"><span class="fill ${cls}" style="width:${Math.round(100*p.duration_s/maxDur)}%" title="${p.distinct_mobs} mobs"></span></span>
-          <span class="muted" style="font-size:11px">${Math.round(p.duration_s)}s${dps}${dth}${dt}</span></div>`));
-      });
-    }
     if((t.boss_times||[]).length)
       box.append(el('<div class="contrib" style="margin-top:6px">Boss combat time: '+t.boss_times.map(b=>`${esc(b.name)} ${fmtMin(b.duration_s)}${b.segments>1?` <span class="muted">(${b.segments} phases)</span>`:''}`).join(' · ')+'</div>'));
     box.append(el(`<div class="contrib" style="margin-top:4px">${esc(t.forces_note||'')}</div>`));
@@ -1144,25 +1128,28 @@ render();
         const a = dps[n], s = sims[n]||{}, ceil = s.dps||0, top = s.top12_typical||0;
         const kl = s.top12_key||12; if(top>0) anyTop=true;
         const roleTag = a.role==='tank'?' 🛡️':a.role==='healer'?' 💚':'';
-        const gap = (haveSim && ceil>0)? Math.round(100*a.run_dps/ceil) : null;
+        // Headline % = run-DPS as a fraction of the typical (90th-percentile) +kl logger.
+        const pct = top>0? Math.round(100*a.run_dps/top) : null;
         const actK = Math.round(a.run_dps/1000);
-        // actual / sim ceiling / gap%, plus the real top-+12 median as a third reference.
-        const topTxt = top>0? ` <span class="muted">· typical +${kl} ${Math.round(top/1000)}k</span>` : '';
+        // Typical (the % denominator) + sim ceiling shown as muted context.
+        const refTxt = top>0
+          ? ` <span class="muted">(typical +${kl} ${Math.round(top/1000)}k${ceil>0?` · ${Math.round(ceil/1000)}k sim`:''})</span>`
+          : (ceil>0? ` <span class="muted">(${Math.round(ceil/1000)}k sim)</span>` : '');
         // If the sim sits above the real +12 field, the ceiling itself is suspect (sim runs hot).
         const rmTxt = s.sim_realism==='optimistic'
           ? ` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — the ceiling is likely optimistic for this spec, so don't read the gap as pure execution">⚠ sim hot</span>` : '';
-        const gapTxt = gap!==null
-          ? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${actK}k / ${Math.round(ceil/1000)}k sim · ${gap}%</span>${topTxt}${rmTxt}`
-          : `${actK}k${topTxt}`;
+        const gapTxt = pct!==null
+          ? `<span class="${pct<70?'low':pct<90?'lever':'ok-use'}">${actK}k · ${pct}% of typical</span>${refTxt}${rmTxt}`
+          : `${actK}k${refTxt}`;
         const ceilW = haveSim&&ceil>0? Math.round(100*ceil/scaleMax):0; const actW = Math.round(100*a.run_dps/scaleMax);
         const topW = top>0? Math.round(100*top/scaleMax):0;
-        const topMark = top>0? `<span title="typical (field-median) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>` : '';
+        const topMark = top>0? `<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>` : '';
         box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
           <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span>${topMark}</span>
           <span class="muted" style="font-size:12px">${gapTxt}</span></div>`));
       });
       if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+12 benchmark, and the gap%.</div>'));
-      else if(anyTop) box.append(el('<div class="contrib"><span style="color:#e0a040">▎</span> = typical +12 logger (field-median DPS, WCL) for that spec. The SimC ceiling already reflects <em>your</em> gear, so it&#39;s the gear-fair target; this marker is real-player context.</div>'));
+      else if(anyTop) box.append(el('<div class="contrib"><span style="color:#e0a040">▎</span> = typical +12 logger (90th-percentile DPS, WCL) for that spec — the denominator of the % shown. The SimC ceiling already reflects <em>your</em> gear, so it&#39;s the gear-fair target; both are real-player context.</div>'));
     }
 
     // C: cooldown economy
@@ -1170,10 +1157,24 @@ render();
     if((ce.players||[]).length){
       box.append(el('<h3 class="muted" style="margin:16px 0 6px">🧊 Cooldown economy — used vs available</h3>'));
       const grid = el('<div class="cde"></div>');
+      // Status for one offensive CD. Long burst CDs get a timestamp-based "missed uses"
+      // estimate (how many more fit on cooldown); short resource-gated ones keep the
+      // simpler under-use flag.
+      const cdStatus = (c)=>{
+        if(!c.seen) return ['muted','not seen',''];
+        if(c.track_missed){
+          const tip = `${c.ready_idle_s}s ready &amp; uncast over the run · longest idle window ${c.longest_idle_s}s (base CD; downtime counts, so this is a ceiling)`;
+          if(c.missed>=2) return ['low',`≈${c.missed} missed`,tip];
+          if(c.missed>=0.8) return ['lever',`≈${c.missed} missed`,tip];
+          return ['ok-use','✓ on CD',tip];
+        }
+        return c.low? ['low','under-used '+c.usage_pct+'%',''] : ['ok-use','✓ on CD',''];
+      };
       ce.players.forEach(p=>{
         if(!p.offensive.length && !p.defensive.length) return;
-        const cdRows = (arr)=>arr.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.seen?(c.used+'× · '+c.per_min+'/min'):'—'}</td>
-          <td class="${!c.seen?'muted':c.low?'low':'ok-use'}">${!c.seen?'not seen':c.low?('under-used '+c.usage_pct+'%'):'✓ on CD'}</td></tr>`).join('');
+        const cdRows = (arr)=>arr.map(c=>{const [cls,txt,tip]=cdStatus(c);
+          return `<tr><td>${esc(c.name)}</td><td>${c.seen?(c.used+'× · '+c.per_min+'/min'):'—'}</td>
+          <td class="${cls}"${tip?` title="${tip}"`:''}>${txt}</td></tr>`;}).join('');
         const defRows = (arr)=>arr.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.used}×</td></tr>`).join('');
         let h = `<div><h4>${esc(p.name)} <span class="role">${esc(p.spec||p.class)} · ${esc(p.role)}</span></h4>`;
         if(p.offensive.length) h += `<table class="kv"><thead><tr><th>Offensive CD</th><th>cadence</th><th></th></tr></thead><tbody>${cdRows(p.offensive)}</tbody></table>`;
@@ -1182,6 +1183,8 @@ render();
         grid.append(el(h+'</div>'));
       });
       box.append(grid);
+      if(ce.players.some(p=>(p.offensive||[]).some(c=>c.track_missed)))
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>≈ missed</b> = uses left on the table for long burst CDs, from actual cast timing: ready at the pull, locked for its base CD after each cast, the rest is idle-while-ready ÷ CD. Cooldowns recover between pulls, so it&#39;s wall-clock; downtime is counted, making it an opportunity ceiling, not strict waste. Hover for the idle breakdown.</div>'));
       const ex = ce.externals||{};
       if((ex.given||[]).length){
         box.append(el('<h3 class="muted" style="margin:14px 0 6px">🤝 External defensives (who → whom)</h3>'));
@@ -1225,7 +1228,7 @@ function renderSimcDps(){
       const roleTag = p.role==='tank'?' 🛡️':p.role==='heal'?' 💚':'';
       // SimC profile role is "attack"/"spell" for damage specs; show it as "dps".
       const roleLabel = p.role==='tank'?'tank':p.role==='heal'?'heal':'dps';
-      // Real top-player DPS at +12 (best · median of top 20), and where the sim sits vs it.
+      // Real top-player DPS at +12 (best · 90th-pct typical), and where the sim sits vs it.
       // Headline comparison: our simmed DPS vs the top real +12 log for the spec.
       let topCell='<span class="muted">—</span>', vs='<span class="muted">—</span>';
       if(p.top12_best){

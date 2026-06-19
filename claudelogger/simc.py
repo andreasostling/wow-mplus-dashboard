@@ -723,11 +723,13 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
     dicts are shared with by_player). Pulls WCL characterRankings per (dungeon, class,
     spec); healers are skipped (DPS isn't theirs).
 
-    Rankings carry no item level, and the very top parses are over-geared elites, so the
-    headline number is the FIELD MEDIAN across several pages (`top12_typical`) — a typical
-    well-playing +12 logger, fairer to compare against than the #1 parse (`top12_best`).
-    The SimC ceiling itself is already gear-correct (it sims the player's own items), so
-    it stays the gear-fair personal target; these are real-player context."""
+    Rankings carry no item level. The headline number `top12_typical` is the 90th
+    PERCENTILE of the field across several pages — a strong (top-10%) +12 logger, the
+    target we measure our run-DPS against. It's below the #1 parse (`top12_best`) but
+    well above the field median, so it reads as "what good looks like" without chasing
+    the single over-geared elite. The SimC ceiling itself is already gear-correct (it
+    sims the player's own items), so it stays the gear-fair personal target; these are
+    real-player context."""
     cache: dict[tuple, list[float]] = {}
     for dungeon, ds in (summary.get("by_dungeon") or {}).items():
         enc = MPLUS_ENCOUNTERS.get(dungeon)
@@ -750,7 +752,10 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
                 sim = p.get("dps", 0)
                 pctile = round(100 * sum(1 for x in dps if x < sim) / len(dps))
                 p["top12_best"] = round(dps[0])
-                p["top12_typical"] = round(statistics.median(dps))
+                # 90th percentile of the field = "typical strong logger" target.
+                p90 = (statistics.quantiles(dps, n=10, method="inclusive")[8]
+                       if len(dps) >= 2 else dps[0])
+                p["top12_typical"] = round(p90)
                 p["top12_n"] = len(dps)
                 p["top12_key"] = key_level
                 p["sim_pctile"] = pctile  # where the sim DPS sits within the real field

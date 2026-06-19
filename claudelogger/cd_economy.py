@@ -56,11 +56,44 @@ def _count_casts(casts: list[dict], spell_id: int) -> int:
     return sum(1 for c in casts if c.get("abilityGameID") == spell_id and c.get("type") == "cast")
 
 
+def _cast_times(casts: list[dict], spell_id: int) -> list[int]:
+    return sorted(c["timestamp"] for c in casts
+                  if c.get("abilityGameID") == spell_id and c.get("type") == "cast")
+
+
+def _missed_uses(cast_ts: list[int], cd_s: float, start_ms: int, end_ms: int) -> dict[str, float]:
+    """Estimate uses left on the table from actual cast timestamps.
+
+    Model: the CD is ready at the pull (start_ms), then locked for `cd_s` after each
+    cast. Any wall-clock stretch where it's available but not cast is "ready-idle"
+    (cooldowns recover between pulls, so this is wall-clock, not combat-time). Missed
+    uses ≈ total ready-idle ÷ CD. Because we use the BASE cd, any haste/proc/reset that
+    shortens the real CD only makes us UNDER-count idle — so this never over-accuses.
+    It's an opportunity ceiling (some idle is unavoidable downtime), not strict waste."""
+    cd_ms = cd_s * 1000
+    idle_ms = 0
+    longest_ms = 0
+    avail_at = start_ms  # ready at the pull
+    for c in cast_ts:
+        if c > avail_at:
+            gap = c - avail_at
+            idle_ms += gap
+            longest_ms = max(longest_ms, gap)
+        avail_at = c + cd_ms
+    if end_ms > avail_at:  # still ready when the run ended (or never cast at all)
+        gap = end_ms - avail_at
+        idle_ms += gap
+        longest_ms = max(longest_ms, gap)
+    return {"missed": round(idle_ms / 1000 / cd_s, 1) if cd_s else 0.0,
+            "ready_idle_s": round(idle_ms / 1000), "longest_idle_s": round(longest_ms / 1000)}
+
+
 def _cd_rows(casts: list[dict], table: list[tuple[int, str, int]], combat_s: float,
-             low_frac: float) -> list[dict[str, Any]]:
+             low_frac: float, start_ms: int, end_ms: int, missed_min_cd_s: float) -> list[dict[str, Any]]:
     rows = []
     for sid, name, cd_s in table:
-        used = _count_casts(casts, sid)
+        cast_ts = _cast_times(casts, sid)
+        used = len(cast_ts)
         # `expected` is the naive on-cooldown ceiling (combat ÷ base CD). Talent/proc/
         # haste cooldown-reduction (a normal WoW mechanic, not anything build-specific)
         # shortens the effective CD, so good play can EXCEED this ceiling (usage >100%).
@@ -71,12 +104,19 @@ def _cd_rows(casts: list[dict], table: list[tuple[int, str, int]], combat_s: flo
         # 0 could mean hoarded, not talented, or a wrong id — indistinguishable here.
         expected = max(1, int(combat_s // cd_s)) if combat_s > 0 else 0
         usage = round(used / expected, 2) if expected else 0.0
-        rows.append({
+        row = {
             "name": name, "used": used, "expected": expected,
             "per_min": round(used / (combat_s / 60), 1) if combat_s > 0 else 0.0,
             "usage_pct": round(100 * usage, 0), "seen": used > 0,
             "low": expected > 0 and used > 0 and usage < low_frac,
-        })
+            "track_missed": False,
+        }
+        # Timestamp-based missed-use estimate — only for long press-on-CD burst cooldowns
+        # (short CDs are resource-gated, where the cooldown isn't the binding constraint).
+        if cd_s >= missed_min_cd_s and used > 0 and end_ms > start_ms:
+            row.update(_missed_uses(cast_ts, cd_s, start_ms, end_ms))
+            row["track_missed"] = True
+        rows.append(row)
     return rows
 
 
@@ -133,7 +173,9 @@ def analyze_cd_economy(
         casts = casts_by_source.get(aid, [])
         spec_key = f"{_class_token(actor.sub_type)}:{_class_token(spec)}"
 
-        off_rows = _cd_rows(casts, OFFENSIVE_CDS.get(spec_key, []), combat_s, knobs.cd_low_usage_frac)
+        off_rows = _cd_rows(casts, OFFENSIVE_CDS.get(spec_key, []), combat_s,
+                            knobs.cd_low_usage_frac, fight.start_time, fight.end_time,
+                            knobs.cd_missed_min_cd_s)
 
         # Defensives the player can be fairly credited with: class baseline + any cast.
         # Shown as raw use counts — defensives are reactive, so a "% of theoretical max"

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import unittest
 
-from claudelogger import classify, knowledge, mdt, pulls, report, keystone
+from claudelogger import classify, knowledge, mdt, pulls, report, keystone, cd_economy
 from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
@@ -546,6 +546,45 @@ class TestSeason(unittest.TestCase):
 
         v3 = report._stun_verdict(runs_with_stun, stun_deaths=0, interrupt_deaths=0, total=0)
         self.assertEqual(v3["summary"], "No deaths to judge.")
+
+
+class TestMissedCooldownUses(unittest.TestCase):
+    def _ts(self, *secs):
+        return [s * 1000 for s in secs]  # seconds -> report ms
+
+    def test_perfect_on_cooldown_no_misses(self):
+        # 120s CD cast exactly on cooldown from the pull across a 360s run: 0 missed.
+        r = cd_economy._missed_uses(self._ts(0, 120, 240), 120, 0, 360_000)
+        self.assertEqual(r["missed"], 0.0)
+        self.assertEqual(r["ready_idle_s"], 0)
+
+    def test_idle_after_last_cast_counts(self):
+        # One cast at t=0, then a 360s run: ready again at 120s, idle 240s -> ~2 missed.
+        r = cd_economy._missed_uses(self._ts(0), 120, 0, 360_000)
+        self.assertEqual(r["missed"], 2.0)
+        self.assertEqual(r["ready_idle_s"], 240)
+        self.assertEqual(r["longest_idle_s"], 240)
+
+    def test_gap_between_casts(self):
+        # Casts at 0 and 300 on a 120s CD: ready at 120, idle 180s before the 2nd -> 1.5.
+        r = cd_economy._missed_uses(self._ts(0, 300), 120, 0, 420_000)
+        self.assertEqual(r["missed"], 1.5)
+        self.assertEqual(r["longest_idle_s"], 180)
+
+    def test_holding_before_first_cast_counts(self):
+        # Ready at the pull but first cast at 100s -> 100s idle before it.
+        r = cd_economy._missed_uses(self._ts(100, 220), 120, 0, 340_000)
+        self.assertEqual(r["ready_idle_s"], 100)
+
+    def test_short_cd_not_tracked_but_long_cd_is(self):
+        casts = [{"abilityGameID": 1, "type": "cast", "timestamp": 0},
+                 {"abilityGameID": 2, "type": "cast", "timestamp": 0}]
+        table = [(1, "Short", 25), (2, "Long", 120)]
+        rows = cd_economy._cd_rows(casts, table, 360.0, 0.6, 0, 360_000, missed_min_cd_s=45.0)
+        short, long = {r["name"]: r for r in rows}["Short"], {r["name"]: r for r in rows}["Long"]
+        self.assertFalse(short["track_missed"])
+        self.assertTrue(long["track_missed"])
+        self.assertEqual(long["missed"], 2.0)
 
 
 if __name__ == "__main__":
