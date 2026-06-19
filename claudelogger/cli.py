@@ -32,21 +32,31 @@ def _spell_names_from_runs(runs: list[dict]) -> dict[int, str]:
     return names
 
 
-def build_route_info(client: WCLClient, cfg: Config, runs: list[dict]) -> list[dict]:
-    """Resolve configured keystone.guru routes into per-dungeon 'kick targets':
-    route NPCs that MDT flags as having interruptible casts."""
+def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
+                     spell_cats: dict[int, str] | None = None) -> list[dict]:
+    """Resolve configured keystone.guru routes into per-dungeon kick + stop targets:
+    route NPCs with interruptible casts (kick) or cc/stun-category casts (stop)."""
     routes = keystone.load_routes(cfg.cache_dir, REPO_ROOT)
     npc_facts = mdt.load_npc_facts(cfg.cache_dir, cfg.mdt_expansion)
     spell_names = _spell_names_from_runs(runs)
+    if spell_cats is None:
+        spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
 
-    # Resolve any interruptible spell ids still missing a name via WCL game data.
-    need = {
-        sid
-        for r in routes if r.get("ok")
-        for nid in r["npc_ids"]
-        for sid in npc_facts.get(nid, {}).get("interruptible", [])
-        if sid not in spell_names
-    }
+    # Collect all spell ids we need names for (interruptible + cc/stun on route NPCs).
+    need: set[int] = set()
+    for r in routes:
+        if not r.get("ok"):
+            continue
+        for nid in r["npc_ids"]:
+            f = npc_facts.get(nid)
+            if not f:
+                continue
+            for sid in f["interruptible"]:
+                if sid not in spell_names:
+                    need.add(sid)
+            for sid in f["spells"]:
+                if sid not in f["interruptible"] and spell_cats.get(sid) in ("cc", "stun") and sid not in spell_names:
+                    need.add(sid)
     for sid in need:
         nm = fetch.resolve_ability_name(client, sid)
         if nm:
@@ -56,14 +66,26 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict]) -> list[d
     for r in routes:
         entry = {"display": r.get("dungeon", r["label"]), "norm": _norm(r.get("dungeon", r["label"])),
                  "label": r["label"], "code": r["code"], "ok": r.get("ok", False),
-                 "error": r.get("error", ""), "pulls": r.get("pulls", 0), "threats": []}
+                 "error": r.get("error", ""), "pulls": r.get("pulls", 0),
+                 "threats": [], "stop_threats": []}
         for nid in r.get("npc_ids", []):
             f = npc_facts.get(nid)
-            if not f or not f["interruptible"]:
+            if not f:
                 continue
-            spells = [spell_names.get(s, f"#{s}") for s in f["interruptible"]]
-            entry["threats"].append({"mob": f["name"] or f"NPC {nid}", "npc_id": nid, "spells": sorted(spells)})
+            mob = f["name"] or f"NPC {nid}"
+            if f["interruptible"]:
+                spells = [spell_names.get(s, f"#{s}") for s in f["interruptible"]]
+                entry["threats"].append({"mob": mob, "npc_id": nid, "spells": sorted(spells)})
+            # Non-interruptible spells categorized as cc/stun — need to be stopped via stun/CC.
+            stop_spells = [
+                (s, spell_cats[s]) for s in f["spells"]
+                if s not in f["interruptible"] and spell_cats.get(s) in ("cc", "stun")
+            ]
+            if stop_spells:
+                labeled = [f"{spell_names.get(s, f'#{s}')} ({cat})" for s, cat in stop_spells]
+                entry["stop_threats"].append({"mob": mob, "npc_id": nid, "spells": sorted(labeled)})
         entry["threats"].sort(key=lambda t: t["mob"])
+        entry["stop_threats"].sort(key=lambda t: t["mob"])
         entry["n_npcs"] = len(r.get("npc_ids", []))
         info.append(entry)
     return info
@@ -141,7 +163,7 @@ def cmd_report(args) -> int:
     npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
     spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
     runs = analyze_report(client, cfg, args.code, args.fight, mdt_facts, npc_sets, spell_cats)
-    _emit(cfg, runs, build_route_info(client, cfg, runs))
+    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats))
     return 0
 
 
@@ -156,7 +178,7 @@ def cmd_season(args) -> int:
     runs: list[dict] = []
     for r in reports:
         runs.extend(analyze_report(client, cfg, r["code"], None, mdt_facts, npc_sets, spell_cats))
-    _emit(cfg, runs, build_route_info(client, cfg, runs))
+    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats))
     return 0
 
 

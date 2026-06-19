@@ -271,6 +271,10 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
             {**th, "deaths_here": death_by_mob.get(th["mob"], 0)} for th in r.get("threats", [])
         ]
         kick_targets.sort(key=lambda x: (-x["deaths_here"], x["mob"]))
+        stop_targets = [
+            {**th, "deaths_here": death_by_mob.get(th["mob"], 0)} for th in r.get("stop_threats", [])
+        ]
+        stop_targets.sort(key=lambda x: (-x["deaths_here"], x["mob"]))
         # Detect off-route mobs: compare NPCs seen in pulls against the route's NPC set.
         route_npc_set = set(r.get("npc_ids", []))
         off_route: list[dict] = []
@@ -300,7 +304,7 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
             "label": r["label"], "code": r["code"], "pulls": r.get("pulls", 0),
             "n_npcs": r.get("n_npcs", 0), "ok": r.get("ok", False),
             "error": r.get("error", ""), "kick_targets": kick_targets,
-            "off_route_mobs": deduped,
+            "stop_targets": stop_targets, "off_route_mobs": deduped,
         }
 
 
@@ -327,16 +331,22 @@ def briefing_to_markdown(b: dict) -> str:
 
     route = b.get("route")
     if route:
-        L += ["", f"## 🗺️ On your route — kick targets ({route['n_npcs']} mobs, {route['pulls']} pulls)"]
+        L += ["", f"## 🗺️ On your route — stop targets ({route['n_npcs']} mobs, {route['pulls']} pulls)"]
         if not route["ok"]:
             L.append(f"_Route data unavailable: {route.get('error','?')}_")
-        elif not route["kick_targets"]:
-            L.append("_No interruptible casters on the planned route._")
+        elif not route["kick_targets"] and not route.get("stop_targets"):
+            L.append("_No stoppable casters on the planned route._")
         else:
-            L += ["", "| Mob | Interrupt these | Killed us |", "|---|---|---:|"]
-            for kt in route["kick_targets"]:
-                seen = f"⚠️ {kt['deaths_here']}" if kt["deaths_here"] else "—"
-                L.append(f"| {kt['mob']} | {', '.join(kt['spells'])} | {seen} |")
+            if route["kick_targets"]:
+                L += ["", "**Kick (interruptible)**", "", "| Mob | Interrupt these | Killed us |", "|---|---|---:|"]
+                for kt in route["kick_targets"]:
+                    seen = f"⚠️ {kt['deaths_here']}" if kt["deaths_here"] else "—"
+                    L.append(f"| {kt['mob']} | {', '.join(kt['spells'])} | {seen} |")
+            if route.get("stop_targets"):
+                L += ["", "**Stun/CC (not kickable)**", "", "| Mob | Stop these | Killed us |", "|---|---|---:|"]
+                for st in route["stop_targets"]:
+                    seen = f"⚠️ {st['deaths_here']}" if st["deaths_here"] else "—"
+                    L.append(f"| {st['mob']} | {', '.join(st['spells'])} | {seen} |")
 
     if b.get("fixate_mobs"):
         L += ["", "## ⚡ Fixate mobs — be ready to peel/kite (ignores threat, taunt won't help)", ""]
@@ -583,16 +593,28 @@ function renderBriefing(){
   const rt=b.route;
   if(rt){
     const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
-    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — kick targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
+    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
     if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
-    else if(!(rt.kick_targets||[]).length){ box.append(el('<div class="muted">No interruptible casters on the planned route.</div>')); }
+    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
     else{
-      const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
-      const rb=rtbl.querySelector('tbody');
-      rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
-        <td class="contrib"><span class="lever">${esc((kt.spells||[]).join(', '))}</span></td>
-        <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-      box.append(rtbl);
+      if((rt.kick_targets||[]).length){
+        box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
+        const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const rb=rtbl.querySelector('tbody');
+        rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
+          <td class="contrib"><span class="lever">${esc((kt.spells||[]).join(', '))}</span></td>
+          <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        box.append(rtbl);
+      }
+      if((rt.stop_targets||[]).length){
+        box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
+        const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const sb=stbl.querySelector('tbody');
+        rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
+          <td class="contrib"><span class="lever">${esc((st.spells||[]).join(', '))}</span></td>
+          <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        box.append(stbl);
+      }
     }
     // off-route mobs
     const offRoute = rt.off_route_mobs || [];
