@@ -16,7 +16,8 @@ from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
 def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pulls=None,
-              fixate_mobs=None, timing=None, cd_economy=None, report_start_ms=0) -> dict[str, Any]:
+              fixate_mobs=None, timing=None, cd_economy=None, report_start_ms=0,
+              dangerous_casts=None) -> dict[str, Any]:
     return {
         "report": rep_code,
         "dungeon": fight.name,
@@ -33,6 +34,7 @@ def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pul
         "deaths": [f.to_dict() for f in findings],
         "timing": timing or {},
         "cd_economy": cd_economy or {},
+        "dangerous_casts": dangerous_casts or [],
     }
 
 
@@ -172,7 +174,9 @@ def _counter_for(t: dict) -> tuple[str, str, str]:
 
 
 def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = None,
-                            log_positions: dict | None = None) -> dict[str, Any]:
+                            log_positions: dict | None = None,
+                            public_danger: dict | None = None,
+                            guide_data: dict | None = None) -> dict[str, Any]:
     by_dungeon: dict[str, list[dict]] = defaultdict(list)
     for r in runs:
         by_dungeon[r["dungeon"]].append(r)
@@ -248,6 +252,27 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
                 peel[d["contributions"][0]["source"]] += 1
         fixate_mobs = sorted({m for r in drs for m in r.get("fixate_mobs", [])})
 
+        # Very dangerous casts: merge per ability across this dungeon's runs (worst-case).
+        dc_agg: dict[str, dict] = {}
+        for r in drs:
+            for c in r.get("dangerous_casts", []):
+                e = dc_agg.setdefault(c["ability"], {
+                    "ability": c["ability"], "ability_id": c.get("ability_id", 0), "mobs": set(),
+                    "aoe_pct": 0.0, "aoe_targets": 0, "burst_pct": 0.0,
+                    "burst_s": c.get("burst_s", 0), "is_aoe": False, "is_spike": False,
+                })
+                e["mobs"].update(c.get("mobs", []))
+                e["aoe_pct"] = max(e["aoe_pct"], c.get("aoe_pct", 0.0))
+                e["aoe_targets"] = max(e["aoe_targets"], c.get("aoe_targets", 0))
+                e["burst_pct"] = max(e["burst_pct"], c.get("burst_pct", 0.0))
+                e["is_aoe"] = e["is_aoe"] or c.get("is_aoe", False)
+                e["is_spike"] = e["is_spike"] or c.get("is_spike", False)
+        for e in dc_agg.values():
+            e["mobs"] = sorted(e["mobs"])
+            e["kind"] = "both" if (e["is_aoe"] and e["is_spike"]) else ("aoe" if e["is_aoe"] else "spike")
+        dangerous_casts = sorted(dc_agg.values(),
+                                 key=lambda c: -max(c["aoe_pct"], c["burst_pct"]))
+
         out[dungeon] = {
             "fixate_mobs": fixate_mobs,
             "dungeon": dungeon,
@@ -264,6 +289,12 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
             "comp_interrupts": sorted(comp_int),
             "comp_stuns": sorted(comp_stun),
             "comp_other_cc": sorted(comp_other),
+            "dangerous_casts": dangerous_casts,
+            "danger_spells": sorted(dc_agg.keys()),
+            "danger_source": "logged" if dangerous_casts else "",
+            "danger_meta": {},
+            "guide_abilities": [],
+            "guide_url": "",
         }
 
     if route_info:
@@ -275,6 +306,40 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
             b["comp_interrupts"] = comp_kit["interrupts"]
             b["comp_stuns"] = comp_kit["stuns"]
             b["comp_other_cc"] = comp_kit["other_cc"]
+
+    # Fill dungeons that have no logged dangerous casts with public-log estimates.
+    if public_danger:
+        bnorms = {d: re.sub(r"[^a-z0-9]", "", d.lower()) for d in out}
+        for dungeon, res in public_danger.items():
+            casts = res.get("casts") or []
+            if not casts:
+                continue
+            dn = re.sub(r"[^a-z0-9]", "", dungeon.lower())
+            match = next((d for d, n in bnorms.items() if n == dn or (dn and (dn in n or n in dn))), None)
+            if match is None:
+                match = dungeon
+                out[match] = _empty_briefing(match)
+                bnorms[match] = dn
+            if out[match].get("dangerous_casts"):  # never override real logged data
+                continue
+            out[match]["dangerous_casts"] = casts
+            out[match]["danger_spells"] = sorted({c["ability"] for c in casts})
+            out[match]["danger_source"] = "public"
+            out[match]["danger_meta"] = {"n_logs": res.get("n_logs", 0),
+                                         "key_levels": res.get("key_levels", [])}
+
+    # Attach Method.gg guide data (qualitative "what to watch for") to every dungeon.
+    if guide_data:
+        bnorms = {d: re.sub(r"[^a-z0-9]", "", d.lower()) for d in out}
+        for dungeon, g in guide_data.items():
+            dn = re.sub(r"[^a-z0-9]", "", dungeon.lower())
+            match = next((d for d, n in bnorms.items() if n == dn or (dn and (dn in n or n in dn))), None)
+            if match is None:
+                match = dungeon
+                out[match] = _empty_briefing(match)
+                bnorms[match] = dn
+            out[match]["guide_abilities"] = g.get("abilities", [])
+            out[match]["guide_url"] = g.get("url", "")
     return out
 
 
@@ -282,7 +347,8 @@ def _empty_briefing(name: str) -> dict[str, Any]:
     return {"dungeon": name, "runs": 0, "key_levels": [], "total_deaths": 0, "wipes": 0,
             "threats": [], "peel_mobs": [], "fixate_mobs": [], "leaked_casts": [],
             "cc_starved_pulls": 0, "pulls": 0, "players_dying": [], "comp_interrupts": [],
-            "comp_stuns": [], "comp_other_cc": []}
+            "comp_stuns": [], "comp_other_cc": [], "dangerous_casts": [], "danger_spells": [],
+            "danger_source": "", "danger_meta": {}, "guide_abilities": [], "guide_url": ""}
 
 
 def _merge_route_info(out: dict[str, Any], route_info: list[dict],
@@ -564,6 +630,10 @@ _HTML = r"""<!doctype html>
   <h1>ClaudeLogger — Mythic+ Death Analysis</h1>
   <p class="sub" id="sub"></p>
 
+  <h2 style="margin-top:14px">🗺️ Before the key — route &amp; what to stop/kick</h2>
+  <div class="controls"><select id="fBrief"></select></div>
+  <div id="top-stops"></div>
+
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="deaths">Deaths &amp; survival</button>
     <button class="tab" data-tab="dps">DPS &amp; SimC</button>
@@ -574,7 +644,6 @@ _HTML = r"""<!doctype html>
   <div class="cards" id="cards"></div>
 
   <h2>Pre-run briefing — pull this up before a key</h2>
-  <div class="controls"><select id="fBrief"></select></div>
   <div id="briefing"></div>
 
   <h2>What's killing us — cause breakdown</h2>
@@ -611,8 +680,9 @@ _HTML = r"""<!doctype html>
   <h2>SimC — DPS by dungeon</h2>
   <div class="controls"><select id="fSimcDungeon"><option value="">All dungeons</option></select></div>
   <table id="simc-dps"><thead><tr>
-    <th>Dungeon</th><th>Player</th><th>Spec</th><th>DPS</th><th>Role</th>
+    <th>Dungeon</th><th>Player</th><th>Spec</th><th>SimC DPS</th><th>+12 field (typical · best)</th><th>Sim vs typical</th><th>Role</th>
   </tr></thead><tbody></tbody></table>
+  <div class="contrib" style="margin-top:4px">“+12 field” = real WCL +12 logs for that spec (better-geared than us). “Sim vs typical” is the SimC DPS as a % of the typical logger, plus a <b>realism flag</b>: the percentile the sim lands at in that real field. The field out-gears us, so <b>above ~p90 = the sim is implausibly high (optimistic)</b>; below the field is usually just a gear gap, not a conservative sim.</div>
 
   <h2>Route analysis</h2>
   <div class="controls"><select id="fRouteDungeon"></select></div>
@@ -705,6 +775,7 @@ const bsel = document.getElementById('fBrief');
 Object.keys(BRIEF).sort().forEach(dn=>bsel.append(el(`<option value="${esc(dn)}">${esc(dn)}</option>`)));
 function renderBriefing(){
   const b = BRIEF[bsel.value]; const box = document.getElementById('briefing'); box.innerHTML='';
+  const topBox = document.getElementById('top-stops'); topBox.innerHTML='';
   if(!b){box.append(el('<div class="muted">No data.</div>'));return;}
   const keys=b.key_levels||[];
   const kr = keys.length? (keys.length===1?`+${keys[0]}`:`+${keys[0]}–+${keys[keys.length-1]}`):'?';
@@ -727,30 +798,93 @@ function renderBriefing(){
       <td class="contrib">${esc(t.detail)}</td></tr>`));
   });
   box.append(tbl);
+  // ---- top "before the key" panel: dangerous casts + route stop/kick targets ----
+  const dangerSet = new Set(b.danger_spells||[]);
+  const markSpells = (arr)=>(arr||[]).map(s=>dangerSet.has(s)?('💥 '+esc(s)):esc(s)).join(', ');
+  // Wowhead spell lookup (opens in a new tab). id 0/absent => plain text.
+  const spellLink = (name,id)=> id
+    ? `<a class="lever" href="https://www.wowhead.com/spell=${id}" target="_blank" rel="noopener" title="Look up on Wowhead">${esc(name)} ↗</a>`
+    : `<span class="lever">${esc(name)}</span>`;
+  // Render a spell list with Wowhead links + 💥 on flagged-dangerous casts; falls back
+  // to plain marked names when per-spell ids aren't available.
+  const renderSpells = (pairs, names)=>{
+    if(pairs && pairs.length) return pairs.map(p=>
+      (dangerSet.has(p.name)?'💥 ':'') + spellLink(p.name, p.id)
+      + (p.cat?` <span class="muted">(${esc(p.cat)})</span>`:'')).join(', ');
+    return markSpells(names);
+  };
+  if((b.dangerous_casts||[]).length){
+    const allDanger=b.dangerous_casts; const shown=allDanger.slice(0,12);
+    const more=allDanger.length-shown.length;
+    const dm=b.danger_meta||{};
+    let src='';
+    if(b.danger_source==='public'){
+      const ks=dm.key_levels||[]; const kr=ks.length?(ks.length===1?`+${ks[0]}`:`+${ks[0]}–+${ks[ks.length-1]}`):'';
+      src=` <span class="muted" style="font-weight:normal">· estimated from ${dm.n_logs||0} public log(s)${kr?` (${kr}, median)`:''} — no run of your own yet</span>`;
+    }
+    topBox.append(el(`<h3 class="muted" style="margin:6px 0 6px">💥 Most dangerous casts — these chunk or one-shot${more>0?` <span class="muted" style="font-weight:normal">(top 12 of ${allDanger.length})</span>`:''}${src}</h3>`));
+    const dtbl=el('<table><thead><tr><th>Cast</th><th>Mobs</th><th>Damage</th><th>Type</th></tr></thead><tbody></tbody></table>');
+    const db=dtbl.querySelector('tbody');
+    shown.forEach(c=>{
+      const parts=[];
+      if(c.is_aoe) parts.push(`<span class="av-yes">${Math.round(c.aoe_pct*100)}% party HP</span> (${c.aoe_targets} hit)`);
+      if(c.is_spike) parts.push(`<span class="av-yes">${Math.round(c.burst_pct*100)}%</span> of one player${c.burst_s?(' in '+c.burst_s+'s'):''}`);
+      const type=c.kind==='both'?'AoE + spike':(c.kind==='aoe'?'AoE':'spike');
+      db.append(el(`<tr><td>${spellLink(c.ability, c.ability_id)}</td>
+        <td class="contrib">${esc((c.mobs||[]).join(', '))}</td>
+        <td>${parts.join(' · ')}</td><td class="muted">${type}</td></tr>`));
+    });
+    topBox.append(dtbl);
+  }
+  // ---- Method.gg guide flags (qualitative; covers un-logged dungeons too) ----
+  const GTAG={interrupt:'🛑 interrupt','stop (CC)':'💫 stop','tank buster':'🛡️ tank buster',
+    frontal:'➤ frontal',avoid:'🟢 avoid','line of sight':'🧱 LoS','CC on you':'🌀 CC',
+    'party damage':'💥 party dmg',adds:'➕ adds',important:'⭐ important'};
+  const GORDER=['interrupt','stop (CC)','tank buster','frontal','avoid','line of sight','CC on you','party damage','adds','important'];
+  const GLABEL={interrupt:'interrupt',stop:'stop (CC)','tank-buster':'tank buster',frontal:'frontal',
+    avoid:'avoid',los:'line of sight','cc-effect':'CC on you','party-dam':'party damage','add-spawn':'adds',important:'important'};
+  const ga=b.guide_abilities||[];
+  if(ga.length){
+    const labels=(tags)=>GORDER.filter(L=>(tags||[]).some(t=>GLABEL[t]===L));
+    const prio=(a)=>{const ls=labels(a.tags);return ls.length?GORDER.indexOf(ls[0]):99;};
+    const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
+    const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
+    topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 What the guides flag <span class="muted" style="font-weight:normal">· Method.gg</span>${src}</h3>`));
+    const gtbl=el('<table><thead><tr><th>Ability</th><th>Mob</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
+    const gb=gtbl.querySelector('tbody');
+    sorted.slice(0,18).forEach(a=>{
+      const pills=labels(a.tags).map(L=>`<span class="pill b-other">${GTAG[L]||esc(L)}</span>`).join(' ');
+      gb.append(el(`<tr><td>${spellLink(a.ability, a.spell_id)}</td><td class="muted">${esc(a.mob)}</td>
+        <td${a.note?` title="${esc(a.note)}"`:''}>${pills}</td></tr>`));
+    });
+    topBox.append(gtbl);
+    if(sorted.length>18) topBox.append(el(`<div class="muted" style="font-size:11px">+${sorted.length-18} more — see the full tracker.</div>`));
+  }
   const rt=b.route;
+  if(!rt){ topBox.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
     const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
-    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
-    if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
-    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
+    topBox.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
+    if(!rt.ok){ topBox.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
+    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ topBox.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
     else{
       if((rt.kick_targets||[]).length){
-        box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
+        topBox.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
         const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
         const rb=rtbl.querySelector('tbody');
         rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
-          <td class="contrib"><span class="lever">${esc((kt.spells||[]).join(', '))}</span></td>
+          <td class="contrib">${renderSpells(kt.spell_pairs, kt.spells)}</td>
           <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        box.append(rtbl);
+        topBox.append(rtbl);
       }
       if((rt.stop_targets||[]).length){
-        box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
+        topBox.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
         const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
         const sb=stbl.querySelector('tbody');
         rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
-          <td class="contrib"><span class="lever">${esc((st.spells||[]).join(', '))}</span></td>
+          <td class="contrib">${renderSpells(st.spell_pairs, st.spells)}</td>
           <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        box.append(stbl);
+        topBox.append(stbl);
       }
     }
     // off-route mobs
@@ -872,7 +1006,7 @@ function render(){
         :'<span class="muted">none up</span>';
     const wclUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(d.report)}`;
     tb.append(el(`<tr><td><a href="${wclUrl}" target="_blank" rel="noopener" title="Open on WCL">${esc(d.dungeon)} +${d.key}</a></td><td>${esc(d.player)}</td><td>${esc(d.role)}</td>
-      <td>${d.time_in_fight_s}</td><td>${esc(d.killer)}</td>
+      <td>${d.time_in_fight_s}</td><td>${esc(d.killer)}${d.dangerous_cast?` <span class="av-yes" title="died to a flagged high-damage cast: ${esc(d.dangerous_cast)}">💥</span>`:''}</td>
       <td><span class="pill ${cls}">${esc(lbl)}</span>${d.one_shot?' <span class="muted">1-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑trigger</span>':''}${d.is_cascade?' <span class="muted">cascade</span>':''}</td>
       <td>${av}</td><td>${d.confidence}</td><td class="contrib">${contrib||'<span class=muted>—</span>'}</td>
       <td>${heal}</td><td class="contrib">${def}</td></tr>`));
@@ -896,7 +1030,7 @@ render();
   if(SIMC && SIMC.sim_results && SIMC.sim_results.by_dungeon){
     for(const [dn, ds] of Object.entries(SIMC.sim_results.by_dungeon)){
       const k = dnorm(dn); simLookup[k] = simLookup[k] || {};
-      (ds.players||[]).forEach(p=>{ simLookup[k][p.player] = p.dps; });
+      (ds.players||[]).forEach(p=>{ simLookup[k][p.player] = p; });
     }
   }
   const debriefRuns = RUNS.map((r,i)=>({r,i})).filter(x=>x.r.timing && Object.keys(x.r.timing).length);
@@ -952,24 +1086,33 @@ render();
     // B: DPS actual vs ceiling
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
-      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs SimC ceiling</h3>'));
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs SimC ceiling vs top +12</h3>'));
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
-      let scaleMax = 1; names.forEach(n=>{ scaleMax=Math.max(scaleMax, dps[n].run_dps, sims[n]||0); });
+      let scaleMax = 1; names.forEach(n=>{ const s=sims[n]||{}; scaleMax=Math.max(scaleMax, dps[n].run_dps, s.dps||0, s.top12_typical||0); });
+      let anyTop=false;
       names.sort((a,b)=>dps[b].run_dps-dps[a].run_dps).forEach(n=>{
-        const a = dps[n], ceil = sims[n]||0;
+        const a = dps[n], s = sims[n]||{}, ceil = s.dps||0, top = s.top12_typical||0;
+        const kl = s.top12_key||12; if(top>0) anyTop=true;
         const roleTag = a.role==='tank'?' 🛡️':a.role==='healer'?' 💚':'';
         const gap = (haveSim && ceil>0)? Math.round(100*a.run_dps/ceil) : null;
         const actK = Math.round(a.run_dps/1000);
-        // Show actual AND the SimC ceiling DPS number, plus the gap%.
+        // actual / sim ceiling / gap%, plus the real top-+12 median as a third reference.
+        const topTxt = top>0? ` <span class="muted">· typical +${kl} ${Math.round(top/1000)}k</span>` : '';
+        // If the sim sits above the real +12 field, the ceiling itself is suspect (sim runs hot).
+        const rmTxt = s.sim_realism==='optimistic'
+          ? ` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — the ceiling is likely optimistic for this spec, so don't read the gap as pure execution">⚠ sim hot</span>` : '';
         const gapTxt = gap!==null
-          ? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${actK}k / ${Math.round(ceil/1000)}k sim · ${gap}%</span>`
-          : `${actK}k`;
+          ? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${actK}k / ${Math.round(ceil/1000)}k sim · ${gap}%</span>${topTxt}${rmTxt}`
+          : `${actK}k${topTxt}`;
         const ceilW = haveSim&&ceil>0? Math.round(100*ceil/scaleMax):0; const actW = Math.round(100*a.run_dps/scaleMax);
+        const topW = top>0? Math.round(100*top/scaleMax):0;
+        const topMark = top>0? `<span title="typical (field-median) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>` : '';
         box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
-          <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span></span>
+          <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span>${topMark}</span>
           <span class="muted" style="font-size:12px">${gapTxt}</span></div>`));
       });
-      if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling and see the gap%.</div>'));
+      if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+12 benchmark, and the gap%.</div>'));
+      else if(anyTop) box.append(el('<div class="contrib"><span style="color:#e0a040">▎</span> = typical +12 logger (field-median DPS, WCL) for that spec. The SimC ceiling already reflects <em>your</em> gear, so it&#39;s the gear-fair target; this marker is real-player context.</div>'));
     }
 
     // C: cooldown economy
@@ -1030,13 +1173,31 @@ function renderSimcDps(){
     if(!ds) return;
     (ds.players||[]).sort((a,b)=>b.dps-a.dps).forEach(p=>{
       const roleTag = p.role==='tank'?' 🛡️':p.role==='heal'?' 💚':'';
+      // SimC profile role is "attack"/"spell" for damage specs; show it as "dps".
+      const roleLabel = p.role==='tank'?'tank':p.role==='heal'?'heal':'dps';
+      // Real top-player DPS at +12 (best · median of top 20), and where the sim sits vs it.
+      let bench='<span class="muted">—</span>', vs='<span class="muted">—</span>';
+      if(p.top12_best){
+        const k=p.top12_key||12;
+        bench=`<span title="field median and best of real +${k} ${esc(p.spec)} logs (n=${p.top12_n||0})">${Math.round(p.top12_typical/1000)}k · ${Math.round(p.top12_best/1000)}k</span>`;
+        if(p.top12_typical){ const pct=Math.round(100*p.dps/p.top12_typical);
+          // realism flag: where the sim sits in the (better-geared) real +12 field.
+          const RM={optimistic:['⚠ p'+p.sim_pctile+' — sim likely high','low'],
+                    plausible:['✓ p'+p.sim_pctile+' — plausible','ok-use'],
+                    below_field:['p'+p.sim_pctile+' — below field (gear)','muted']};
+          const rm=RM[p.sim_realism]||['',''];
+          vs=`<span class="${pct>=100?'ok-use':pct>=85?'lever':'low'}">${pct}% of typical</span>`
+             + (rm[0]?` <span class="${rm[1]}" style="font-size:11px" title="sim DPS is at the ${p.sim_pctile}th percentile of real +${k} logs for this spec; the field is better-geared, so above ~p90 flags an optimistic sim, while below-field is usually just a gear gap">${rm[0]}</span>`:'');
+        }
+      }
       tb.append(el(`<tr><td>${esc(d)}</td><td>${esc(p.player)}</td><td>${esc(p.spec)}</td>
-        <td>${Math.round(p.dps).toLocaleString()}</td><td>${esc(p.role)}${roleTag}</td></tr>`));
+        <td>${Math.round(p.dps).toLocaleString()}</td><td>${bench}</td><td>${vs}</td>
+        <td>${esc(roleLabel)}${roleTag}</td></tr>`));
     });
     if(!fd){
       tb.append(el(`<tr style="border-top:2px solid var(--line);font-weight:700">
         <td>${esc(d)}</td><td colspan="2">Group total</td>
-        <td>${Math.round(ds.group_dps).toLocaleString()}</td><td></td></tr>`));
+        <td>${Math.round(ds.group_dps).toLocaleString()}</td><td colspan="2"></td><td></td></tr>`));
     }
   });
 }

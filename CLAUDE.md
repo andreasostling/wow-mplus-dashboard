@@ -61,7 +61,7 @@ Outputs in `out/`: `analysis.json` (source of truth), `dashboard.html` (self-con
 ```
 cli → wcl (auth+GraphQL+cache) → fetch (report/fights/events/roles/mana/combatantInfo)
     → knowledge (interruptible/stunnable/CC/fixate facts) + mdt (curated) + keystone (routes)
-    → classify (per-death cause + healer + defensives + pulls + wipes)
+    → danger (very-dangerous-cast detection) → classify (per-death cause + healer + defensives + pulls + wipes)
     → report (season aggregate + dungeon briefings + JSON + HTML)
 
 cli simc → fetch (combatantInfo → gear/talents)
@@ -80,9 +80,11 @@ cli simc → fetch (combatantInfo → gear/talents)
 | `keystone.py` | Resolve keystone.guru route short-codes → set of route `npc_id`s (`DEFAULT_ROUTES`, override via `routes.json`). |
 | `defensives.py` | `PERSONAL_DEFENSIVES`, `EXTERNAL_DEFENSIVES`, `CLASS_BASELINE` tables. |
 | `pulls.py` | `segment_pulls` (combat segments via NPC-activity gaps) + `pull_cc_tally` (interrupt demand vs supply, `cc_starved`). |
-| `classify.py` | The core: HP reconstruction, damage-window attribution, cause buckets, healer/defensive checks, melee threat/fixate split, wipe detection. Returns `(findings, pull_tallies)`. |
+| `classify.py` | The core: HP reconstruction, damage-window attribution, cause buckets, healer/defensive checks, melee threat/fixate split, wipe detection. Returns `(findings, pull_tallies)`. Tags deaths with `dangerous_cast` when the lethal cast is a flagged high-damage cast. |
+| `danger.py` | "Very dangerous cast" detection from the DamageTaken stream (NPC casts aren't logged): worst AoE pulse vs party HP + worst single-player burst in a bounded window vs that player's HP. Feeds the briefing's "Most dangerous casts" list + per-death tagging. Thresholds in `Knobs.danger_*`. `analyze_public` reuses the same metric on public WCL fightRankings logs (reconstructing party HP from overkill) to estimate un-logged dungeons — opt-in via `--public-danger N`, median-aggregated, labelled with the key levels. |
+| `guides.py` | Scrapes Method.gg's per-dungeon Ability Tracker (server-rendered HTML, no API) into `{mob, ability, spell_id, tags, note}` — qualitative interrupt/tank-buster/avoid/frontal/etc. flags + Wowhead links. Cached under `cache/guides/`. Fills the "what to watch for" gap for un-logged dungeons without log variance. |
 | `report.py` | `build_season`, `build_dungeon_briefings`, `_stun_verdict`, JSON + HTML (`_HTML` template) + markdown briefings. |
-| `simc.py` | WCL combatantInfo → simc profiles, route loading/parsing, simc binary invocation, result parsing, group buff injection. |
+| `simc.py` | WCL combatantInfo → simc profiles, route loading/parsing, simc binary invocation, result parsing, group buff injection. `attach_dps_benchmarks` adds real-player DPS at the key level (WCL `characterRankings`, `bracket = key−1`; field median = "typical", not elite) to each simmed player, plus a `sim_realism` flag = where the sim DPS lands in that (better-geared) real field: ≥p90 ⇒ "optimistic" (sim runs hot), ≤p10 ⇒ below-field (gear-explained). Surfaced in the SimC table + run-debrief. Rankings carry no item level and ilvl⇆skill are confounded, so we don't gear-normalize — the SimC ceiling (your own gear) is the gear-fair target; the field is real-player context. |
 | `route_analysis.py` | Bloodlust optimization (greedy placement, exhaustion tracking), CD alignment, timer math, pull imbalance, travel waste, mana pressure, AoE breakpoints, ranged pull compensation (Keg Smash range). |
 
 ## External-data gotchas (hard-won — keep these in mind)
@@ -112,6 +114,14 @@ cli simc → fetch (combatantInfo → gear/talents)
   with a `talents=` line from the `/simc` in-game addon instead.
 - **keystone.guru SimC export is UI-only** — no public API. Users must manually export
   from the route page (Simulate button → key level 12 → copy). Files go in `routes/simc/`.
+- **The SimC export drops per-pull `bloodlust=` flags** (always exports `bloodlust=0`,
+  regardless of the lust icons on the route map). The lusts ARE in the keystone.guru route
+  though — as a lust-family spell (Time Warp etc.) on each pull's `killZones[].spells`. So
+  `keystone.lust_pulls_for` reads them straight from the route (cached) and
+  `simc.load_route_events` re-applies them onto the `.simc` pull lines; this survives
+  re-exporting the raw route file. A `"lusts"` block in `routes.json`
+  (`{"lusts": {"Dungeon Name": [pull, …]}}`) is a per-dungeon manual override that wins
+  over the auto-detected pulls.
 
 ## How to extend
 
@@ -121,6 +131,8 @@ cli simc → fetch (combatantInfo → gear/talents)
   (`kind` ∈ interrupt / stun / incap / disorient / fear / knockback / root / silence;
   only `stun` is a "true stun", the rest are "other CC").
 - **New/changed routes** → `routes.json` at repo root (`{"Dungeon Name": "shortCode"}`).
+  Lust pulls are auto-read from keystone.guru; the optional sibling `"lusts"` block only
+  overrides them manually: `{"lusts": {"Dungeon Name": [1, 9, 20]}}`.
 - **New expansion/season** → set `CLAUDELOGGER_MDT_EXPANSION` (matches the MDT repo folder).
 - **New death cause** → add a bucket constant + add it to `AVOIDABLE_BUCKETS` in
   `classify.py`, return it from `_decide_bucket`/`_classify_melee`, and add a label to the

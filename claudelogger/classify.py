@@ -141,6 +141,7 @@ class DeathFinding:
     needs_stun_of: list[str] = field(default_factory=list)
     needs_interrupt_of: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    dangerous_cast: str = ""  # ability name if the lethal cast is a flagged high-damage cast
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -166,6 +167,7 @@ class DeathFinding:
             "healer": self.healer.to_dict(),
             "defensives": self.defensives.to_dict(),
             "notes": self.notes,
+            "dangerous_cast": self.dangerous_cast,
         }
 
 
@@ -416,6 +418,7 @@ def classify_fight(
     roles: dict[int, tuple[str, str]],  # actor_id -> (role, spec)
     healer_mana_series: list[tuple[int, int, int]] | None = None,
     real_max_hp: dict[str, int] | None = None,  # char_name -> true max HP (from local log)
+    danger_names: set[str] | None = None,        # ability names flagged as very dangerous casts
 ) -> tuple[list[DeathFinding], list[dict[str, Any]]]:
     """Returns (death findings, per-pull CC tallies).
 
@@ -552,6 +555,16 @@ def classify_fight(
             )
         )
     _detect_wipes(findings, knobs)
+    # Tag deaths whose lethal cast (killing blow, else top contributor) is a flagged
+    # high-damage cast — so the dashboard can mark "died to a known dangerous cast".
+    if danger_names:
+        for f in findings:
+            top = (f.contributions[0].ability_name
+                   if f.contributions and not f.contributions[0].is_self_or_friendly else "")
+            if f.killing_ability in danger_names:
+                f.dangerous_cast = f.killing_ability
+            elif top and top in danger_names:
+                f.dangerous_cast = top
     return findings, pull_tallies
 
 

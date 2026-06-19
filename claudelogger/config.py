@@ -83,6 +83,20 @@ class Knobs:
     # time-loss breakdown (shorter gaps are just pull-to-pull travel noise).
     downtime_gap_s: float = 8.0
 
+    # "Very dangerous cast" detection (empirical, from the DamageTaken stream — NPC
+    # casts aren't logged, so a "cast" is approximated by its damage). An enemy ability
+    # is flagged dangerous if EITHER a single AoE pulse (same caster+ability landing
+    # within danger_pulse_bucket_ms across party members) dealt >= danger_aoe_party_frac
+    # of the party's total max HP, OR its worst burst on a single player within a
+    # danger_burst_window_ms sliding window dealt >= danger_burst_hp_frac of that
+    # player's max HP. The bounded window catches one-shots and short telegraphed
+    # channels (Fire Spit) without summing a whole pull of sustained damage. Auto-attacks
+    # ("Melee") are never flagged.
+    danger_pulse_bucket_ms: int = 400
+    danger_aoe_party_frac: float = 0.20
+    danger_burst_window_ms: int = 4000
+    danger_burst_hp_frac: float = 0.60
+
     # Wipe detection: deaths within wipe_gap_ms chain into one combat cluster; a
     # cluster killing >= wipe_min_players distinct members is a wipe. Keep the first
     # wipe_keep deaths (the trigger); tag the rest as cascade (excluded from cause stats).
@@ -101,6 +115,20 @@ DUNGEON_TIMERS: dict[str, int] = {
     "Seat of the Triumvirate": 1800,
     "Skyreach": 1680,
     "Windrunner Spire": 1980,
+}
+
+# WCL encounter ids for the Midnight S1 Mythic+ zone (worldData.zone 47). Used to pull
+# public fightRankings so un-logged dungeons can still get an (estimated) dangerous-cast
+# list from other groups' logs.
+MPLUS_ENCOUNTERS: dict[str, int] = {
+    "Algeth'ar Academy": 112526,
+    "Magisters' Terrace": 12811,
+    "Maisara Caverns": 12874,
+    "Nexus-Point Xenas": 12915,
+    "Pit of Saron": 10658,
+    "Seat of the Triumvirate": 361753,
+    "Skyreach": 61209,
+    "Windrunner Spire": 12805,
 }
 
 # Map dungeon name → slug used for route .simc file names.

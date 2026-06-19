@@ -414,3 +414,59 @@ def discover_reports(client: WCLClient, character_id: int, limit: int = 25) -> l
     res = client.query(_RECENT_REPORTS_Q, {"id": character_id, "limit": limit}, use_cache=False)
     char = res["data"]["characterData"]["character"]
     return (char.get("recentReports") or {}).get("data") or []
+
+
+_FIGHT_RANKINGS_Q = """
+query ($e: Int!, $difficulty: Int!) {
+  worldData { encounter(id: $e) { fightRankings(difficulty: $difficulty) } }
+}
+"""
+
+_CHAR_RANKINGS_Q = """
+query ($e: Int!, $cls: String!, $spec: String!, $bracket: Int!, $page: Int!) {
+  worldData { encounter(id: $e) {
+    characterRankings(className: $cls, specName: $spec, difficulty: 10,
+                      metric: dps, bracket: $bracket, page: $page)
+  } }
+}
+"""
+
+
+def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: str,
+                             spec_name: str, *, key_level: int = 12, pages: int = 1) -> list[dict[str, Any]]:
+    """Top DPS rankings for a class/spec on an encounter at a fixed key level.
+
+    WCL's `bracket` is keystone level minus 1 (bracket 11 == +12). Returns
+    [{name, dps, key, guild}] sorted highest-DPS-first across the requested pages."""
+    out: list[dict[str, Any]] = []
+    for page in range(1, max(1, pages) + 1):
+        try:
+            res = client.query(_CHAR_RANKINGS_Q, {"e": encounter_id, "cls": class_name,
+                                                  "spec": spec_name, "bracket": key_level - 1, "page": page})
+        except Exception:
+            break
+        cr = (((res.get("data") or {}).get("worldData") or {}).get("encounter") or {}).get("characterRankings")
+        rankings = cr.get("rankings", []) if isinstance(cr, dict) else []
+        for r in rankings:
+            out.append({"name": r.get("name"), "dps": r.get("amount", 0.0),
+                        "key": r.get("bracketData"), "guild": (r.get("guild") or {}).get("name")})
+        if not (isinstance(cr, dict) and cr.get("hasMorePages")):
+            break
+    return out
+
+
+def fetch_fight_rankings(client: WCLClient, encounter_id: int, difficulty: int = 10) -> list[dict[str, Any]]:
+    """Public top-ranked logs for an encounter → [{code, fightID, key_level}].
+
+    The ranked entries point at public reports (code + fightID) we can pull events from.
+    `difficulty: 10` is Mythic+ in WCL. bracketData carries the keystone level."""
+    res = client.query(_FIGHT_RANKINGS_Q, {"e": encounter_id, "difficulty": difficulty})
+    fr = (((res.get("data") or {}).get("worldData") or {}).get("encounter") or {}).get("fightRankings")
+    rankings = fr.get("rankings", []) if isinstance(fr, dict) else []
+    out: list[dict[str, Any]] = []
+    for r in rankings:
+        rep = r.get("report") or {}
+        code, fid = rep.get("code"), rep.get("fightID")
+        if code and fid:
+            out.append({"code": code, "fightID": fid, "key_level": r.get("bracketData")})
+    return out

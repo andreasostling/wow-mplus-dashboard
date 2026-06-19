@@ -11,9 +11,9 @@ import sys
 
 import re
 
-from . import fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog
+from . import fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
 from .classify import classify_fight
-from .config import Config, DUNGEON_SLUGS, REPO_ROOT
+from .config import Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
 from .wcl import WCLClient
 
@@ -74,16 +74,21 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
                 continue
             mob = f["name"] or f"NPC {nid}"
             if f["interruptible"]:
-                spells = [spell_names.get(s, f"#{s}") for s in f["interruptible"]]
-                entry["threats"].append({"mob": mob, "npc_id": nid, "spells": sorted(spells)})
+                pairs = sorted(({"id": s, "name": spell_names.get(s, f"#{s}")}
+                                for s in f["interruptible"]), key=lambda p: p["name"])
+                entry["threats"].append({"mob": mob, "npc_id": nid,
+                                         "spells": [p["name"] for p in pairs], "spell_pairs": pairs})
             # Non-interruptible spells categorized as cc/stun — need to be stopped via stun/CC.
             stop_spells = [
                 (s, spell_cats[s]) for s in f["spells"]
                 if s not in f["interruptible"] and spell_cats.get(s) in ("cc", "stun")
             ]
             if stop_spells:
-                labeled = [f"{spell_names.get(s, f'#{s}')} ({cat})" for s, cat in stop_spells]
-                entry["stop_threats"].append({"mob": mob, "npc_id": nid, "spells": sorted(labeled)})
+                pairs = sorted(({"id": s, "name": spell_names.get(s, f"#{s}"), "cat": cat}
+                                for s, cat in stop_spells), key=lambda p: p["name"])
+                entry["stop_threats"].append({"mob": mob, "npc_id": nid,
+                                              "spells": [f"{p['name']} ({p['cat']})" for p in pairs],
+                                              "spell_pairs": pairs})
         entry["threats"].sort(key=lambda t: t["mob"])
         entry["stop_threats"].sort(key=lambda t: t["mob"])
         entry["npc_ids"] = r.get("npc_ids", [])   # needed by _merge_route_info off-route detection
@@ -144,7 +149,12 @@ def analyze_report(
         # Real max HP per player from the local combat log (sharpens death analysis).
         _log_entry = combatlog.for_dungeon(log_positions or {}, fight.name)
         real_max_hp = _log_entry["player_max_hp"] if _log_entry else {}
-        findings, pull_tallies = classify_fight(rep, fe, kb, cfg.knobs, roles, mana_series, real_max_hp)
+        # Very dangerous casts (empirical, from damage taken) — feeds death tagging + briefing.
+        dangerous_casts = danger.analyze(fe, rep, set(fight.friendly_players), real_max_hp, cfg.knobs)
+        findings, pull_tallies = classify_fight(
+            rep, fe, kb, cfg.knobs, roles, mana_series, real_max_hp,
+            danger_names={c["ability"] for c in dangerous_casts},
+        )
         party = [
             {"name": a.name, "role": roles.get(a.id, ("dps", ""))[0],
              "spec": roles.get(a.id, ("", ""))[1], "class": a.sub_type}
@@ -188,8 +198,43 @@ def analyze_report(
         })
         runs.append(report.build_run(code, fight, party, _comp_cc_labels(kb), findings,
                                      pull_tallies, fixate_mobs, timing, cdecon,
-                                     report_start_ms=rep.start_time))
+                                     report_start_ms=rep.start_time, dangerous_casts=dangerous_casts))
     return runs
+
+
+def _guide_data(cfg: Config) -> dict[str, dict]:
+    """Method.gg ability-tracker data per dungeon (cached). Qualitative 'what to watch
+    for' for every dungeon — fills the danger gap for un-logged ones."""
+    out: dict[str, dict] = {}
+    for dungeon, slug in DUNGEON_SLUGS.items():
+        g = guides.fetch_guide(dungeon, slug, cfg.cache_dir)
+        if g.get("ok"):
+            out[dungeon] = g
+        else:
+            print(f"  guide: {dungeon} — {g.get('error', 'unavailable')}", file=sys.stderr)
+    return out
+
+
+def _public_danger(client: WCLClient, cfg: Config, runs: list[dict], n_logs: int) -> dict[str, dict]:
+    """For dungeons with no logged dangerous casts, estimate them from public top logs.
+    Returns {dungeon_name: {casts, n_logs, key_levels}}. n_logs<=0 => disabled."""
+    if n_logs <= 0:
+        return {}
+    logged = {r["dungeon"] for r in runs if r.get("dangerous_casts")}
+    norm = lambda s: "".join(ch for ch in s.lower() if ch.isalnum())
+    logged_norm = {norm(d) for d in logged}
+    out: dict[str, dict] = {}
+    for dungeon, enc in MPLUS_ENCOUNTERS.items():
+        if norm(dungeon) in logged_norm:
+            continue
+        print(f"  public danger: {dungeon} (encounter {enc}) — sampling {n_logs} public log(s)…", file=sys.stderr)
+        res = danger.analyze_public(client, dungeon, enc, cfg.knobs, n_logs=n_logs)
+        if res.get("casts"):
+            out[dungeon] = res
+            ks = res["key_levels"]
+            print(f"    {len(res['casts'])} cast(s) from {res['n_logs']} log(s)"
+                  f"{f' (+{min(ks)}–+{max(ks)})' if ks else ''}", file=sys.stderr)
+    return out
 
 
 def cmd_report(args) -> int:
@@ -200,7 +245,8 @@ def cmd_report(args) -> int:
     spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
     log_positions = combatlog.load_positions(cfg.cache_dir)
     runs = analyze_report(client, cfg, args.code, args.fight, mdt_facts, npc_sets, spell_cats, log_positions)
-    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats), log_positions)
+    pub = _public_danger(client, cfg, runs, getattr(args, "public_danger", 0))
+    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats), log_positions, pub, _guide_data(cfg))
     return 0
 
 
@@ -216,12 +262,14 @@ def cmd_season(args) -> int:
     runs: list[dict] = []
     for r in reports:
         runs.extend(analyze_report(client, cfg, r["code"], None, mdt_facts, npc_sets, spell_cats, log_positions))
-    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats), log_positions)
+    pub = _public_danger(client, cfg, runs, getattr(args, "public_danger", 0))
+    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats), log_positions, pub, _guide_data(cfg))
     return 0
 
 
 def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None,
-          log_positions: dict | None = None) -> None:
+          log_positions: dict | None = None, public_danger: dict | None = None,
+          guide_data: dict | None = None) -> None:
     season = report.build_season(runs)
     # Exact mob positions from the local advanced combat log (off-route localization).
     if log_positions is None:
@@ -229,7 +277,7 @@ def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None,
     if log_positions:
         print(f"combat log: positions for {len(log_positions)} dungeon run(s) "
               f"({combatlog.find_archive()})", file=sys.stderr)
-    briefings = report.build_dungeon_briefings(runs, route_info, log_positions)
+    briefings = report.build_dungeon_briefings(runs, route_info, log_positions, public_danger, guide_data)
     jpath = report.write_json(cfg.out_dir, season, runs, briefings)
     hpath = report.write_html(cfg.out_dir, season, runs, briefings)
     report.write_html_artifact(cfg.out_dir, season, runs, briefings)
@@ -382,6 +430,18 @@ def cmd_simc(args) -> int:
 
     # Build summary and emit
     sim_summary = simc.build_simc_summary(all_sim_results)
+    # Real top-player DPS at the sim's key level → "how far off is the SimC ceiling?".
+    if sim_summary.get("by_dungeon"):
+        kl = cfg.simc.key_level
+        print(f"\n  fetching top +{kl} DPS benchmarks (WCL rankings)…", file=sys.stderr)
+        simc.attach_dps_benchmarks(client, sim_summary, key_level=kl)
+        for dn, ds in sim_summary["by_dungeon"].items():
+            for p in ds.get("players", []):
+                if p.get("top12_best"):
+                    gap = round(100 * p["dps"] / p["top12_typical"]) if p.get("top12_typical") else 0
+                    print(f"    {dn[:18]:18} {p['player']:12} sim {p['dps']/1000:6.0f}k  vs +{kl} "
+                          f"typical {p['top12_typical']/1000:5.0f}k / best {p['top12_best']/1000:5.0f}k  "
+                          f"(sim is {gap}% of the typical +{kl} logger)", file=sys.stderr)
 
     # Write results
     _emit_simc(cfg, sim_summary, all_route_analyses, profiles)
@@ -495,10 +555,16 @@ def main(argv: list[str] | None = None) -> int:
     pr = sub.add_parser("report", help="Analyze a single report by code.")
     pr.add_argument("code")
     pr.add_argument("--fight", type=int, default=None, help="Limit to one fight id.")
+    pr.add_argument("--public-danger", type=int, nargs="?", const=8, default=0, metavar="N",
+                    help="Estimate dangerous casts for un-logged dungeons from N public top "
+                         "logs each (default 8 when flag given; 0 = off).")
     pr.set_defaults(func=cmd_report)
 
     ps = sub.add_parser("season", help="Discover and analyze recent reports for the character.")
     ps.add_argument("--limit", type=int, default=25)
+    ps.add_argument("--public-danger", type=int, nargs="?", const=8, default=0, metavar="N",
+                    help="Estimate dangerous casts for un-logged dungeons from N public top "
+                         "logs each (default 8 when flag given; 0 = off).")
     ps.set_defaults(func=cmd_season)
 
     psc = sub.add_parser("simc", help="Run SimC sims per player per dungeon route.")

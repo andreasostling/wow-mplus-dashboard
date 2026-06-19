@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import Config, DUNGEON_SLUGS, SimcKnobs
+from . import fetch
+from .config import Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, SimcKnobs
 
 # WCL specID → (simc_class, simc_spec, role).
 # https://wowpedia.fandom.com/wiki/SpecializationID
@@ -243,11 +245,35 @@ def extract_profiles(
     return profiles
 
 
-def load_route_events(routes_dir: Path, dungeon: str) -> str | None:
+def apply_lust_overrides(route_text: str, pulls: list[int]) -> str:
+    """Force ``bloodlust=1`` on the given pull numbers in a route's pull lines.
+
+    keystone.guru's SimC export consistently emits ``bloodlust=0`` on every pull (the
+    route-map lust icons don't survive the export), so we re-assert lust placement
+    from the routes.json ``"lusts"`` block. Pull numbers are matched ignoring the
+    zero-padding the export uses (``pull=01`` matches override ``1``).
+    """
+    if not pulls:
+        return route_text
+    want = set(pulls)
+
+    def _sub(m: "re.Match[str]") -> str:
+        return m.group(0) if int(m.group(1)) not in want else f"pull,pull={m.group(1)},bloodlust=1,"
+
+    return re.sub(r"pull,pull=(\d+),bloodlust=\d,", _sub, route_text)
+
+
+def load_route_events(routes_dir: Path, dungeon: str,
+                      lust_overrides: dict[str, list[int]] | None = None) -> str | None:
     """Load the keystone.guru simc route export for a dungeon.
 
     Returns the raid_events block (everything after comments), or None if not found
     or the file is still a placeholder.
+
+    keystone.guru's SimC export drops the per-pull ``bloodlust=`` flags, so the lusts
+    are re-applied from the route's killZone lust spells (read straight from
+    keystone.guru, cached) — or a manual routes.json ``"lusts"`` override. Pass
+    ``lust_overrides={}`` to disable, or an explicit ``{dungeon: [pulls]}`` to force.
     """
     slug = DUNGEON_SLUGS.get(dungeon)
     if not slug:
@@ -260,7 +286,14 @@ def load_route_events(routes_dir: Path, dungeon: str) -> str | None:
     content_lines = [ln for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     if not content_lines:
         return None
-    return "\n".join(content_lines)
+    route_text = "\n".join(content_lines)
+    repo_root = routes_dir.parent.parent
+    if lust_overrides is not None:
+        lust_pulls = lust_overrides.get(dungeon, [])
+    else:
+        from . import keystone
+        lust_pulls = keystone.lust_pulls_for(dungeon, repo_root / "cache", repo_root)
+    return apply_lust_overrides(route_text, lust_pulls)
 
 
 def parse_route_pulls(route_text: str) -> list[dict]:
@@ -682,3 +715,46 @@ def build_simc_summary(results: list[SimcResult]) -> dict:
         "by_player": player_summaries,
         "total_sims": len(results),
     }
+
+
+def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int = 3) -> None:
+    """Add real-player DPS at the given key level to each simmed player, so the dashboard
+    can show how far the SimC ceiling is from real play. Mutates summary in place (player
+    dicts are shared with by_player). Pulls WCL characterRankings per (dungeon, class,
+    spec); healers are skipped (DPS isn't theirs).
+
+    Rankings carry no item level, and the very top parses are over-geared elites, so the
+    headline number is the FIELD MEDIAN across several pages (`top12_typical`) — a typical
+    well-playing +12 logger, fairer to compare against than the #1 parse (`top12_best`).
+    The SimC ceiling itself is already gear-correct (it sims the player's own items), so
+    it stays the gear-fair personal target; these are real-player context."""
+    cache: dict[tuple, list[float]] = {}
+    for dungeon, ds in (summary.get("by_dungeon") or {}).items():
+        enc = MPLUS_ENCOUNTERS.get(dungeon)
+        if not enc:
+            continue
+        for p in ds.get("players", []):
+            if p.get("role") == "heal":
+                continue
+            toks = (p.get("spec") or "").split()  # e.g. "Frost Mage" -> spec="Frost", class="Mage"
+            if len(toks) < 2:
+                continue
+            cls_name, spec_name = toks[-1], " ".join(toks[:-1])
+            ck = (enc, cls_name, spec_name)
+            if ck not in cache:
+                rk = fetch.fetch_character_rankings(client, enc, cls_name, spec_name,
+                                                    key_level=key_level, pages=pages)
+                cache[ck] = sorted((r["dps"] for r in rk if r.get("dps")), reverse=True)
+            dps = cache[ck]
+            if dps:
+                sim = p.get("dps", 0)
+                pctile = round(100 * sum(1 for x in dps if x < sim) / len(dps))
+                p["top12_best"] = round(dps[0])
+                p["top12_typical"] = round(statistics.median(dps))
+                p["top12_n"] = len(dps)
+                p["top12_key"] = key_level
+                p["sim_pctile"] = pctile  # where the sim DPS sits within the real field
+                # >=p90 vs a BETTER-geared field => the sim is implausibly high (optimistic);
+                # below the field is gear-explained, not proof the sim is conservative.
+                p["sim_realism"] = ("optimistic" if pctile >= 90
+                                    else "below_field" if pctile <= 10 else "plausible")

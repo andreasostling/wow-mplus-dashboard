@@ -21,7 +21,7 @@ DEFAULT_ROUTES: dict[str, str] = {
     "Algeth'ar Academy": "9PNs04g",
     "Magisters' Terrace": "gPJe7sy",
     "Maisara Caverns": "sezZwXs",
-    "Nexus-Point Xenas": "x7xlbdZ",
+    "Nexus-Point Xenas": "qb5NbFE",
     "Pit of Saron": "mPZiMk1",
     "Seat of the Triumvirate": "npvVcGj",
     "Skyreach": "kTPSQ7o",
@@ -34,6 +34,49 @@ _HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+# Bloodlust-family spell ids that keystone.guru attaches to a pull's `spells` array
+# when you mark it for lust. (Shaman Bloodlust/Heroism, Mage Time Warp, Hunter Primal
+# Rage, Evoker Fury of the Aspects, drum items.) icon_name is a secondary signal so a
+# new lust source still registers even if its id isn't listed yet.
+LUST_SPELL_IDS = {2825, 32182, 80353, 264667, 390386, 309658, 230935, 256740, 178207}
+_LUST_ICON_HINTS = ("timewarp", "bloodlust", "heroism", "primal_rage",
+                    "fury_of_the_aspects", "drums")
+
+
+def _is_lust_spell(spell: dict[str, Any]) -> bool:
+    if spell.get("id") in LUST_SPELL_IDS:
+        return True
+    icon = (spell.get("icon_name") or "").lower()
+    return any(h in icon for h in _LUST_ICON_HINTS)
+
+
+def _extract_lust_pulls(html: str) -> list[int]:
+    """Pull indices whose killZone carries a lust-family spell, from the embedded
+    killZones JSON. Best-effort: returns [] if the structure isn't found/parses."""
+    key = '"killZones":['
+    i = html.find(key)
+    if i < 0:
+        return []
+    j = i + len(key) - 1  # at the '['
+    depth = 0
+    for k in range(j, len(html)):
+        c = html[k]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    arr = json.loads(html[j:k + 1])
+                except ValueError:
+                    return []
+                pulls = sorted({kz["index"] for kz in arr
+                                if isinstance(kz, dict) and isinstance(kz.get("index"), int)
+                                and any(_is_lust_spell(s) for s in (kz.get("spells") or []))})
+                return pulls
+    return []
+
+
 _ENEMIES = re.compile(r'"enemies":\[([0-9,]+)\]')
 _DATA_FILE = re.compile(r'(https://assets\.keystone\.guru/[^"\']+/mapcontext/data/[a-z0-9-]+/\d+/(?:facade|split_floors)\.js)')
 _ENEMY_NPC = re.compile(r'"id":(\d+),"mapping_version_id":\d+,(?:(?!"id":).)*?"npc_id":(\d+)', re.S)
@@ -79,6 +122,7 @@ def fetch_route(label: str, code: str, cache_dir: Path, *, refresh: bool = False
         pulls += 1
         enemy_ids |= {int(x) for x in em.group(1).split(",") if x}
     out["pulls"] = pulls
+    out["lust_pulls"] = _extract_lust_pulls(html)
 
     df = _DATA_FILE.search(html)
     npc_ids: set[int] = set()
@@ -97,13 +141,76 @@ def fetch_route(label: str, code: str, cache_dir: Path, *, refresh: bool = False
     return out
 
 
-def load_routes(cache_dir: Path, repo_root: Path, *, refresh: bool = False) -> list[dict[str, Any]]:
-    """Resolve all configured routes. routes.json (repo root) overrides defaults."""
-    routes = dict(DEFAULT_ROUTES)
+# Reserved top-level keys in routes.json that are NOT dungeon→short-code entries.
+_ROUTES_JSON_RESERVED = {"lusts"}
+
+
+def _read_routes_json(repo_root: Path) -> dict[str, Any]:
     rj = repo_root / "routes.json"
-    if rj.exists():
-        try:
-            routes.update(json.loads(rj.read_text(encoding="utf-8")))
-        except ValueError:
-            pass
+    if not rj.exists():
+        return {}
+    try:
+        data = json.loads(rj.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except ValueError:
+        return {}
+
+
+def load_routes(cache_dir: Path, repo_root: Path, *, refresh: bool = False) -> list[dict[str, Any]]:
+    """Resolve all configured routes. routes.json (repo root) overrides defaults.
+
+    routes.json may also carry a reserved ``"lusts"`` block (see
+    :func:`load_lust_overrides`); only string-valued, non-reserved keys are treated
+    as dungeon→short-code overrides.
+    """
+    routes = dict(DEFAULT_ROUTES)
+    overrides = {k: v for k, v in _read_routes_json(repo_root).items()
+                 if k not in _ROUTES_JSON_RESERVED and isinstance(v, str)}
+    routes.update(overrides)
     return [fetch_route(label, code, cache_dir, refresh=refresh) for label, code in routes.items()]
+
+
+def load_lust_overrides(repo_root: Path) -> dict[str, list[int]]:
+    """Read the optional ``"lusts"`` block from routes.json (repo root).
+
+    Maps dungeon display name → list of pull numbers that should carry Bloodlust.
+    keystone.guru's SimC export drops per-pull ``bloodlust=`` flags, so this lets us
+    re-assert lust placement durably — it survives re-exporting the raw route file.
+    Returns ``{}`` when absent or malformed.
+    """
+    raw = _read_routes_json(repo_root).get("lusts")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[int]] = {}
+    for dungeon, pulls in raw.items():
+        if isinstance(pulls, list):
+            out[dungeon] = [int(p) for p in pulls if isinstance(p, (int, float, str)) and str(p).strip().lstrip("-").isdigit()]
+    return out
+
+
+_lust_pulls_memo: dict[tuple[str, str], list[int]] = {}
+
+
+def lust_pulls_for(dungeon: str, cache_dir: Path, repo_root: Path, *, refresh: bool = False) -> list[int]:
+    """Resolve which pulls carry Bloodlust for a dungeon.
+
+    A manual ``"lusts"`` entry in routes.json wins (escape hatch); otherwise read it
+    straight from the keystone.guru route (the lust-family spell on each pull's
+    killZone). Only the one dungeon's route is fetched, and it's disk-cached, so this
+    stays offline-friendly on re-runs. Memoised per (dungeon, cache_dir) within a run."""
+    manual = load_lust_overrides(repo_root)
+    if dungeon in manual:
+        return manual[dungeon]
+    memo_key = (dungeon, str(cache_dir))
+    if not refresh and memo_key in _lust_pulls_memo:
+        return _lust_pulls_memo[memo_key]
+    code = dict(DEFAULT_ROUTES)
+    code.update({k: v for k, v in _read_routes_json(repo_root).items()
+                 if k not in _ROUTES_JSON_RESERVED and isinstance(v, str)})
+    short = code.get(dungeon)
+    pulls: list[int] = []
+    if short:
+        route = fetch_route(dungeon, short, cache_dir, refresh=refresh)
+        pulls = route.get("lust_pulls", []) or []
+    _lust_pulls_memo[memo_key] = pulls
+    return pulls
