@@ -1,0 +1,42 @@
+# Maisara Caverns — keystone.guru route: sezZwXs
+# Paste the SimC export from keystone.guru below (key level 12).
+# In keystone.guru: open route → Simulate button → select key level 12 → copy string.
+
+fight_style=DungeonRoute
+override.bloodlust=0
+override.arcane_intellect=0
+override.power_word_fortitude=0
+override.mark_of_the_wild=0
+override.battle_shout=0
+override.mystic_touch=0
+override.chaos_brand=0
+override.skyfury=0
+override.hunters_mark=0
+override.bleeding=0
+single_actor_batch=1
+max_time=1980
+enemy="Sha Easy Route"
+enemy_health=999999
+keystone_level=12
+raid_events=/invulnerable,cooldown=5160,duration=5160,retarget=1
+raid_events+=/pull,pull=01,bloodlust=0,delay=013,enemies="frenzied-berserker_1":1244503|"frenzied-berserker_2":1244503|"frenzied-berserker_3":1244503|"frenzied-berserker_4":1244503|"frenzied-berserker_5":1244503|"bramblemaw-bear_1":1136285|"bramblemaw-bear_2":1136285|"bramblemaw-bear_3":1136285|"mire-laborer_1":703415|"mire-laborer_2":703415|"keen-headhunter_1":1082177|"dread-souleater_1":1623266
+raid_events+=/pull,pull=02,bloodlust=0,delay=014,enemies="bramblemaw-bear_1":1136285|"bramblemaw-bear_2":1136285|"hex-guardian_1":1731483|"warding-mask_1":324653|"warding-mask_2":324653|"frenzied-berserker_1":1244503|"frenzied-berserker_2":1244503
+raid_events+=/pull,pull=03,bloodlust=0,delay=007,enemies="ritual-hexxer_1":973959|"frenzied-berserker_1":1244503|"keen-headhunter_1":1082177|"hexbound-eagle_1":1028068|"mire-laborer_1":703415|"mire-laborer_2":703415|"mire-laborer_3":703415|"mire-laborer_4":703415|"mire-laborer_5":703415|"hulking-juggernaut_1":1947918|"bramblemaw-bear_1":1136285
+raid_events+=/pull,pull=04,bloodlust=0,delay=009,enemies="bramblemaw-bear_1":1136285|"bramblemaw-bear_2":1136285|"warding-mask_1":324653|"warding-mask_2":324653|"warding-mask_3":324653|"warding-mask_4":324653|"warding-mask_5":324653|"keen-headhunter_1":1082177|"frenzied-berserker_1":1244503
+raid_events+=/pull,pull=05,bloodlust=0,delay=011,enemies="dread-souleater_1":1623266|"hexbound-eagle_1":1028068|"hexbound-eagle_2":1028068|"frenzied-berserker_1":1244503|"frenzied-berserker_2":1244503|"keen-headhunter_1":1082177
+raid_events+=/pull,pull=06,bloodlust=0,delay=014,enemies="frenzied-berserker_1":1244503|"ritual-hexxer_1":973959|"hulking-juggernaut_1":1947918|"warding-mask_1":324653|"warding-mask_2":324653|"mire-laborer_1":703415|"mire-laborer_2":703415|"mire-laborer_3":703415|"mire-laborer_4":703415|"mire-laborer_5":703415
+raid_events+=/pull,pull=07,bloodlust=0,delay=021,enemies="BOSS_murojin_1":6087246|"BOSS_nekraxx_1":6087246
+raid_events+=/pull,pull=08,bloodlust=0,delay=026,enemies="reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285|"reanimated-warrior_3":1136285|"reanimated-warrior_4":1136285|"tormented-shade_1":973959|"tormented-shade_2":973959|"restless-gnarldin_1":1947918|"grim-skirmisher_1":649306|"grim-skirmisher_2":649306
+raid_events+=/pull,pull=09,bloodlust=0,delay=009,enemies="rokhzal_1":2705443|"deaths-grasp_1":162326|"rokhzal_1":2813660|"tormented-shade_1":973959|"tormented-shade_2":973959|"reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285
+raid_events+=/pull,pull=10,bloodlust=0,delay=010,enemies="restless-gnarldin_1":1947918|"grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"grim-skirmisher_3":649306|"grim-skirmisher_4":649306|"reanimated-warrior_1":1136285
+raid_events+=/pull,pull=11,bloodlust=0,delay=010,enemies="reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285|"bound-defender_1":1839701|"tormented-shade_1":973959|"tormented-shade_2":973959
+raid_events+=/pull,pull=12,bloodlust=0,delay=022,enemies="reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285|"reanimated-warrior_3":1136285|"reanimated-warrior_4":1136285|"reanimated-warrior_5":1136285|"hollow-soulrender_1":1623266|"grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"tormented-shade_1":973959
+raid_events+=/pull,pull=13,bloodlust=0,delay=013,enemies="reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285|"grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"grim-skirmisher_3":649306|"grim-skirmisher_4":649306|"grim-skirmisher_5":649306|"grim-skirmisher_6":649306|"ritual-hexxer_1":973959|"hollow-soulrender_1":1623266
+raid_events+=/pull,pull=14,bloodlust=0,delay=021,enemies="reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285|"reanimated-warrior_3":1136285|"reanimated-warrior_4":1136285|"reanimated-warrior_5":1136285|"grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"bound-defender_1":1839701|"hollow-soulrender_1":1623266
+raid_events+=/pull,pull=15,bloodlust=0,delay=022,enemies="BOSS_vordaza_1":6493062|"unstable-phantom_1":901814
+raid_events+=/pull,pull=16,bloodlust=0,delay=012,enemies="ritual-hexxer_1":973959|"reanimated-warrior_1":1136285|"reanimated-warrior_2":1136285|"reanimated-warrior_3":1136285|"reanimated-warrior_4":1136285|"grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"grim-skirmisher_3":649306|"grim-skirmisher_4":649306
+raid_events+=/pull,pull=17,bloodlust=0,delay=029,enemies="grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"grim-skirmisher_3":649306|"grim-skirmisher_4":649306|"grim-skirmisher_5":649306|"tormented-shade_1":973959|"tormented-shade_2":973959|"gloomwing-bat_1":973959|"gloomwing-bat_2":973959
+raid_events+=/pull,pull=18,bloodlust=0,delay=010,enemies="grim-skirmisher_1":649306|"grim-skirmisher_2":649306|"grim-skirmisher_3":649306|"grim-skirmisher_4":649306|"tormented-shade_1":973959|"tormented-shade_2":973959
+raid_events+=/pull,pull=19,bloodlust=0,delay=009,enemies="bound-defender_1":1839701|"gloomwing-bat_1":973959|"gloomwing-bat_2":973959
+raid_events+=/pull,pull=20,bloodlust=0,delay=017,enemies="zaibyan_1":432870
+raid_events+=/pull,pull=21,bloodlust=0,delay=006,enemies="BOSS_raktul_1":9581776|"soulbind-totem_1":180363

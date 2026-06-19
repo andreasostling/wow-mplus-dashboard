@@ -6,9 +6,9 @@ pre-run briefings. **Read [README.md](README.md) for the user-facing feature lis
 
 ## Conventions (important)
 
-- **Stdlib only — no dependencies.** HTTP is `urllib`, JSON is `json`, HTML/CSS/JS is
-  hand-written string templates. Do not add `requests`/`httpx`/`jinja`/`pandas`. The
-  user must be able to `python -m claudelogger ...` with zero installs. Python 3.11+.
+- **Python 3.11+.** External dependencies are allowed if warranted. HTTP is `urllib`,
+  JSON is `json`, HTML/CSS/JS is hand-written string templates. SimC integration
+  requires a local `simc` binary (set `CLAUDELOGGER_SIMC_BINARY` if not on PATH).
 - **Secrets** live in `.env` (git-ignored). Never commit or echo the client secret.
 - **Everything is cached** under `cache/` (WCL GraphQL responses by query hash, MDT
   parses, keystone routes). Re-runs are offline and rate-limit-friendly. Delete a cache
@@ -24,19 +24,26 @@ pre-run briefings. **Read [README.md](README.md) for the user-facing feature lis
 python -m claudelogger report <REPORT_CODE> [--fight <ID>]   # one report/fight
 python -m claudelogger season [--limit 25]                   # discover + analyze recent
 python -m claudelogger briefing "<dungeon substring>"        # print a briefing
+python -m claudelogger simc [--dungeon "Xenas"] [--no-sim]   # SimC sims + route analysis
 python -m py_compile claudelogger/*.py                        # quick syntax check
 ```
 
 Outputs in `out/`: `analysis.json` (source of truth), `dashboard.html` (self-contained),
-`dashboard_artifact.html` (content-only variant for publishing), `briefings/<Dungeon>.md`.
+`dashboard_artifact.html` (content-only variant for publishing), `briefings/<Dungeon>.md`,
+`simc_analysis.json` (sim results + route analysis), `simc/` (per-player per-dungeon profiles + HTML reports).
 
 ## Architecture (pipeline order)
 
 ```
-cli → wcl (auth+GraphQL+cache) → fetch (report/fights/events/roles/mana)
+cli → wcl (auth+GraphQL+cache) → fetch (report/fights/events/roles/mana/combatantInfo)
     → knowledge (interruptible/stunnable/CC/fixate facts) + mdt (curated) + keystone (routes)
     → classify (per-death cause + healer + defensives + pulls + wipes)
     → report (season aggregate + dungeon briefings + JSON + HTML)
+
+cli simc → fetch (combatantInfo → gear/talents)
+    → simc (profile assembly + route merge + binary invocation + result parsing)
+    → route_analysis (lust optimization + CD alignment + timer + failure modes)
+    → report (integrated into dashboard HTML)
 ```
 
 | Module | Responsibility |
@@ -51,6 +58,8 @@ cli → wcl (auth+GraphQL+cache) → fetch (report/fights/events/roles/mana)
 | `pulls.py` | `segment_pulls` (combat segments via NPC-activity gaps) + `pull_cc_tally` (interrupt demand vs supply, `cc_starved`). |
 | `classify.py` | The core: HP reconstruction, damage-window attribution, cause buckets, healer/defensive checks, melee threat/fixate split, wipe detection. Returns `(findings, pull_tallies)`. |
 | `report.py` | `build_season`, `build_dungeon_briefings`, `_stun_verdict`, JSON + HTML (`_HTML` template) + markdown briefings. |
+| `simc.py` | WCL combatantInfo → simc profiles, route loading/parsing, simc binary invocation, result parsing, group buff injection. |
+| `route_analysis.py` | Bloodlust optimization (greedy placement, exhaustion tracking), CD alignment, timer math, pull imbalance, travel waste, mana pressure, AoE breakpoints, ranged pull compensation (Keg Smash range). |
 
 ## External-data gotchas (hard-won — keep these in mind)
 
@@ -73,6 +82,12 @@ cli → wcl (auth+GraphQL+cache) → fetch (report/fights/events/roles/mana)
   per-dungeon enemy→npc map is in `<version>/facade.js` **or** `<version>/split_floors.js`.
 - **MDT enemy `["id"]` is the npc_id**; spells are `["spells"]={[spellId]={["interruptible"]=true}}`.
   Spell *names* aren't in MDT — resolve from logs or `fetch.resolve_ability_name`.
+- **WCL combatantInfo has gear but NOT a talent hash.** `talentTree` returns
+  `[{id, rank, nodeID}]` (TraitNodeEntryIDs). Reconstructing the Blizzard export hash
+  requires a tree-classification lookup we don't have. Use `routes/overrides/<name>.simc`
+  with a `talents=` line from the `/simc` in-game addon instead.
+- **keystone.guru SimC export is UI-only** — no public API. Users must manually export
+  from the route page (Simulate button → key level 12 → copy). Files go in `routes/simc/`.
 
 ## How to extend
 
@@ -86,10 +101,28 @@ cli → wcl (auth+GraphQL+cache) → fetch (report/fights/events/roles/mana)
 - **New death cause** → add a bucket constant + add it to `AVOIDABLE_BUCKETS` in
   `classify.py`, return it from `_decide_bucket`/`_classify_melee`, and add a label to the
   dashboard `bucketLabel` map in `report.py`.
+- **New simc route** → export from keystone.guru (Simulate button, key 12) and save as
+  `routes/simc/<dungeon-slug>.simc`. Add dungeon to `DUNGEON_SLUGS` and `DUNGEON_TIMERS`
+  in `config.py`.
+- **Player talent overrides** → `/simc` addon output in `routes/overrides/<name>.simc`.
+  SimC processes lines top-to-bottom, so overrides replace WCL-extracted values.
+- **SimC tunables** → env vars: `CLAUDELOGGER_SIMC_BINARY`, `CLAUDELOGGER_SIMC_KEY_LEVEL`,
+  `CLAUDELOGGER_SIMC_ITERATIONS`, `CLAUDELOGGER_SIMC_THREADS`.
 
 ## Context
 
 The user is **Chibes**, a Brewmaster Monk tank (WCL char id `109774647`), in a fixed
-5-stack (Rogue / Frost Mage / Resto Druid + the user + a swapping 5th DPS). The game is
-**WoW: Midnight, Season 1**. Goal: figure out what the group dies to, whether it's
-avoidable, and what to counter (kick / stun / move / defensive / pickup).
+5-stack:
+
+| Player | Class | Spec | Role |
+|---|---|---|---|
+| Chibes | Monk | Brewmaster | Tank |
+| Stickerduva | Rogue | Subtlety | DPS |
+| Gaddini | Mage | Frost | DPS |
+| Fyraweave | Druid | Restoration | Healer |
+| Decayheat | Warlock | Demonology/Destruction | DPS (5th) |
+
+The game is **WoW: Midnight, Season 1**. Goals:
+1. Figure out what the group dies to, whether it's avoidable, and what to counter.
+2. SimC integration: sim each player against dungeon routes to optimize DPS,
+   cooldown alignment, bloodlust placement, and identify route inefficiencies.

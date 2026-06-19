@@ -264,6 +264,41 @@ def get_roles(client: WCLClient, code: str, fight_id: int) -> dict[int, tuple[st
     return roles
 
 
+# CombatantInfo events contain per-player gear, talents, stats, specID at the
+# start of the encounter. One event per player, keyed by sourceID.
+_COMBATANT_INFO_Q = """
+query ($code: String!, $fightID: Int!, $startTime: Float!, $endTime: Float!) {
+  reportData {
+    report(code: $code) {
+      events(
+        fightIDs: [$fightID]
+        dataType: CombatantInfo
+        startTime: $startTime
+        endTime: $endTime
+        limit: 10000
+      ) {
+        data
+      }
+    }
+  }
+}
+"""
+
+
+def fetch_combatant_info(client: WCLClient, code: str, fight: Fight) -> list[dict[str, Any]]:
+    """Fetch CombatantInfo events for a fight — one per player with gear/talents/stats."""
+    res = client.query(
+        _COMBATANT_INFO_Q,
+        {
+            "code": code,
+            "fightID": fight.id,
+            "startTime": float(fight.start_time),
+            "endTime": float(fight.end_time),
+        },
+    )
+    return res["data"]["reportData"]["report"]["events"].get("data") or []
+
+
 _RECENT_REPORTS_Q = """
 query ($id: Int!, $limit: Int!) {
   characterData {

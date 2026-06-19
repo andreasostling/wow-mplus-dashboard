@@ -1,0 +1,40 @@
+# Seat of the Triumvirate — keystone.guru route: npvVcGj
+# Paste the SimC export from keystone.guru below (key level 12).
+# In keystone.guru: open route → Simulate button → select key level 12 → copy string.
+
+fight_style=DungeonRoute
+override.bloodlust=0
+override.arcane_intellect=0
+override.power_word_fortitude=0
+override.mark_of_the_wild=0
+override.battle_shout=0
+override.mystic_touch=0
+override.chaos_brand=0
+override.skyfury=0
+override.hunters_mark=0
+override.bleeding=0
+single_actor_batch=1
+max_time=2040
+enemy="Sha Easy Route"
+enemy_health=999999
+keystone_level=12
+raid_events=/invulnerable,cooldown=5160,duration=5160,retarget=1
+raid_events+=/pull,pull=01,bloodlust=0,delay=013,enemies="merciless-subjugator_1":1406830|"merciless-subjugator_2":1406830|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870|"shadowguard-champion_1":1190395|"shadowguard-champion_2":1190395|"shadowguard-champion_3":1190395|"shadowguard-champion_4":1190395|"shadowguard-champion_5":1190395|"shadowguard-champion_6":1190395
+raid_events+=/pull,pull=02,bloodlust=0,delay=010,enemies="merciless-subjugator_1":1406830|"shadowguard-champion_1":1190395|"shadowguard-champion_2":1190395|"shadowguard-champion_3":1190395|"dark-conjurer_1":919850|"bound-voidcaller_1":541089|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870
+raid_events+=/pull,pull=03,bloodlust=0,delay=014,enemies="merciless-subjugator_1":1406830|"shadowguard-champion_1":1190395|"shadowguard-champion_2":1190395|"shadowguard-champion_3":1190395|"dark-conjurer_1":919850|"bound-voidcaller_1":541089|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870
+raid_events+=/pull,pull=04,bloodlust=0,delay=009,enemies="BOSS_zuraal-the-ascended_1":6312699|"coalesced-void_1":248900|"coalesced-void_2":248900|"coalesced-void_3":248900|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870
+raid_events+=/pull,pull=05,bloodlust=0,delay=029,enemies="rift-warden_1":2056136|"ruthless-riftstalker_1":1136285|"ruthless-riftstalker_2":1136285|"shadowguard-champion_1":1190395|"shadowguard-champion_2":1190395|"ravenous-umbralfin_1":1028068|"ravenous-umbralfin_2":1028068
+raid_events+=/pull,pull=06,bloodlust=0,delay=010,enemies="rift-warden_1":2056136|"ravenous-umbralfin_1":1028068|"ravenous-umbralfin_2":1028068
+raid_events+=/pull,pull=07,bloodlust=0,delay=015,enemies="shadowguard-champion_1":1190395|"shadowguard-champion_2":1190395|"dark-conjurer_1":919850|"bound-voidcaller_1":541089|"ravenous-umbralfin_1":1028068|"ravenous-umbralfin_2":1028068|"merciless-subjugator_1":1406830
+raid_events+=/pull,pull=08,bloodlust=0,delay=019,enemies="rift-warden_1":2056136|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870
+raid_events+=/pull,pull=09,bloodlust=0,delay=044,enemies="shadowguard-champion_1":1190395|"shadowguard-champion_2":1190395|"dark-conjurer_1":919850|"bound-voidcaller_1":541089|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870
+raid_events+=/pull,pull=10,bloodlust=0,delay=021,enemies="rift-warden_1":2056136|"dark-conjurer_1":919850|"ruthless-riftstalker_1":1136285|"umbral-war-adept_1":1947918|"bound-voidcaller_1":541089
+raid_events+=/pull,pull=11,bloodlust=0,delay=012,enemies="ruthless-riftstalker_1":1136285|"ruthless-riftstalker_2":1136285|"ravenous-umbralfin_1":1028068|"ravenous-umbralfin_2":1028068
+raid_events+=/pull,pull=12,bloodlust=0,delay=018,enemies="BOSS_saprish_1":16909015|"BOSS_darkfang_1":16909015|"BOSS_shadewing_1":16909015|"famished-broken_1":432870|"famished-broken_2":432870|"famished-broken_3":432870|"famished-broken_4":432870|"famished-broken_5":432870
+raid_events+=/pull,pull=13,bloodlust=0,delay=031,enemies="void-infused-destroyer_1":1947918|"void-infused-destroyer_2":1947918|"dire-voidbender_1":1028068|"dire-voidbender_2":1028068|"ruthless-riftstalker_1":1136285
+raid_events+=/pull,pull=14,bloodlust=0,delay=016,enemies="void-infused-destroyer_1":1947918|"void-infused-destroyer_2":1947918|"dire-voidbender_1":1028068|"dire-voidbender_2":1028068
+raid_events+=/pull,pull=15,bloodlust=0,delay=012,enemies="grand-shadow-weaver_1":1569156|"dark-conjurer_1":919850|"dark-conjurer_2":919850|"bound-voidcaller_1":541089|"bound-voidcaller_2":541089
+raid_events+=/pull,pull=16,bloodlust=0,delay=011,enemies="dire-voidbender_1":1028068|"dire-voidbender_2":1028068|"grand-shadow-weaver_1":1569156
+raid_events+=/pull,pull=17,bloodlust=0,delay=012,enemies="grand-shadow-weaver_1":1569156|"grand-shadow-weaver_2":1569156
+raid_events+=/pull,pull=18,bloodlust=0,delay=009,enemies="BOSS_viceroy-nezhar_1":7890874|"umbral-tentacle_1":149054|"umbral-tentacle_2":149054
+raid_events+=/pull,pull=19,bloodlust=0,delay=046,enemies="BOSS_lura_1":15687058|"depravation-wave-stalker_1":141031|"depravation-wave-stalker_2":141031|"depravation-wave-stalker_3":141031|"depravation-wave-stalker_4":141031

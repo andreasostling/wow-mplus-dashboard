@@ -389,19 +389,25 @@ def write_json(out_dir: Path, season: dict, runs: list[dict], briefings: dict | 
 # --------------------------------------------------------------------------
 # HTML dashboard — self-contained, data embedded, vanilla JS for sort/filter.
 # --------------------------------------------------------------------------
-def write_html(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None) -> Path:
-    data_json = json.dumps({"season": season, "runs": runs, "briefings": briefings or {}}, ensure_ascii=False)
+def write_html(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None, simc_data: dict | None = None) -> Path:
+    payload = {"season": season, "runs": runs, "briefings": briefings or {}}
+    if simc_data:
+        payload["simc"] = simc_data
+    data_json = json.dumps(payload, ensure_ascii=False)
     path = out_dir / "dashboard.html"
     path.write_text(_HTML.replace("/*DATA*/", data_json), encoding="utf-8")
     return path
 
 
-def write_html_artifact(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None) -> Path:
+def write_html_artifact(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None, simc_data: dict | None = None) -> Path:
     """Content-only HTML (no doctype/html/head/body wrappers) for publishing as a
     Claude artifact, which supplies those wrappers itself. The <title> is carried
     through (it normally lives in the head we drop) so the published artifact is
     named, not left as the bare filename."""
-    full = _HTML.replace("/*DATA*/", json.dumps({"season": season, "runs": runs, "briefings": briefings or {}}, ensure_ascii=False))
+    payload = {"season": season, "runs": runs, "briefings": briefings or {}}
+    if simc_data:
+        payload["simc"] = simc_data
+    full = _HTML.replace("/*DATA*/", json.dumps(payload, ensure_ascii=False))
     title = full[full.index("<title>"): full.index("</title>") + len("</title>")]
     style = full[full.index("<style>"): full.index("</style>") + len("</style>")]
     body = full[full.index("<body>") + len("<body>"): full.index("</body>")]
@@ -454,6 +460,15 @@ _HTML = r"""<!doctype html>
   .brief-cards .card{padding:10px} .brief-cards .card .n{font-size:20px} .brief-cards .card .l{font-size:11px}
   details summary{cursor:pointer}
   footer{color:var(--mut);font-size:12px;margin-top:30px}
+  .sev-critical{color:var(--bad);font-weight:700} .sev-warning{color:var(--warn)} .sev-info{color:var(--mut)}
+  .issue-cat{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:600;
+             background:var(--card);border:1px solid var(--line);margin-right:4px}
+  .lust-pill{background:#3a2c12;color:var(--warn);display:inline-block;padding:1px 8px;border-radius:20px;
+             font-size:11px;font-weight:600}
+  .pull-bar{display:grid;grid-template-columns:50px 1fr 80px;gap:6px;align-items:center;margin:2px 0}
+  .pull-bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:14px;overflow:hidden;position:relative}
+  .pull-bar .fill{height:100%;min-width:2px}
+  .fill-trash{background:var(--accent)} .fill-boss{background:var(--bad)}
 </style></head>
 <body><div class="wrap">
   <h1>ClaudeLogger — Mythic+ Death Analysis</h1>
@@ -472,6 +487,18 @@ _HTML = r"""<!doctype html>
 
   <h2>Interruptible casts that leaked (pull-level)</h2>
   <div class="bars" id="leaked"></div>
+
+  <div id="simc-section" style="display:none">
+  <h2>SimC — DPS by dungeon</h2>
+  <div class="controls"><select id="fSimcDungeon"><option value="">All dungeons</option></select></div>
+  <table id="simc-dps"><thead><tr>
+    <th>Dungeon</th><th>Player</th><th>Spec</th><th>DPS</th><th>Role</th>
+  </tr></thead><tbody></tbody></table>
+
+  <h2>Route analysis</h2>
+  <div class="controls"><select id="fRouteDungeon"></select></div>
+  <div id="route-analysis"></div>
+  </div>
 
   <h2>Every death</h2>
   <div class="controls">
@@ -686,5 +713,101 @@ document.querySelectorAll('#deaths th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; sortDir=(sortK===k)?-sortDir:1; sortK=k; render();});
 ['fDungeon','fPlayer','fBucket','fAvoid','fHideCascade'].forEach(id=>document.getElementById(id).onchange=render);
 render();
+
+// ---- SimC + Route Analysis section ----
+(function(){
+const SIMC = DATA.simc;
+if(!SIMC) return;
+document.getElementById('simc-section').style.display='';
+
+// DPS table
+const simRes = SIMC.sim_results || {};
+const byDungeon = simRes.by_dungeon || {};
+const dsel = document.getElementById('fSimcDungeon');
+Object.keys(byDungeon).sort().forEach(d=>dsel.append(el(`<option value="${esc(d)}">${esc(d)}</option>`)));
+
+function renderSimcDps(){
+  const fd = dsel.value;
+  const tb = document.querySelector('#simc-dps tbody'); tb.innerHTML='';
+  const dungeons = fd ? [fd] : Object.keys(byDungeon).sort();
+  dungeons.forEach(d=>{
+    const ds = byDungeon[d];
+    if(!ds) return;
+    (ds.players||[]).sort((a,b)=>b.dps-a.dps).forEach(p=>{
+      const roleTag = p.role==='tank'?' 🛡️':p.role==='heal'?' 💚':'';
+      tb.append(el(`<tr><td>${esc(d)}</td><td>${esc(p.player)}</td><td>${esc(p.spec)}</td>
+        <td>${Math.round(p.dps).toLocaleString()}</td><td>${esc(p.role)}${roleTag}</td></tr>`));
+    });
+    if(!fd){
+      tb.append(el(`<tr style="border-top:2px solid var(--line);font-weight:700">
+        <td>${esc(d)}</td><td colspan="2">Group total</td>
+        <td>${Math.round(ds.group_dps).toLocaleString()}</td><td></td></tr>`));
+    }
+  });
+}
+dsel.onchange = renderSimcDps;
+if(Object.keys(byDungeon).length) renderSimcDps();
+
+// Route analysis
+const routeAnalyses = SIMC.route_analyses || {};
+const rsel = document.getElementById('fRouteDungeon');
+Object.keys(routeAnalyses).sort().forEach(d=>rsel.append(el(`<option value="${esc(d)}">${esc(d)}</option>`)));
+
+function renderRoute(){
+  const ra = routeAnalyses[rsel.value];
+  const box = document.getElementById('route-analysis'); box.innerHTML='';
+  if(!ra||ra.error){box.append(el(`<div class="muted">${esc(ra?.error||'No data')}</div>`));return;}
+
+  // Timer summary
+  const t=ra.timer||{};
+  const mClass = t.margin_s<0?'av-yes':t.margin_s<60?'lever':'av-no';
+  box.append(el(`<div class="verdict">
+    <b>Timer:</b> <span class="${mClass}">${t.margin_s>0?'+':''}${t.margin_s}s margin</span>
+    (est. clear ${Math.round(t.estimated_clear_s)}s / ${t.timer_s}s timer)
+    · <b>${t.death_budget}</b> deaths allowed
+    · group DPS: ${Math.round(t.group_dps_needed||0).toLocaleString()}</div>`));
+
+  // Lust recommendations
+  const lusts = ra.lust_recommendations||[];
+  if(lusts.length){
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🔥 Optimal bloodlust placement</h3>'));
+    const ltbl=el('<table><thead><tr><th>Pull</th><th>Reason</th></tr></thead><tbody></tbody></table>');
+    const lb=ltbl.querySelector('tbody');
+    lusts.forEach(l=>lb.append(el(`<tr><td><span class="lust-pill">Pull ${l.pull_num}</span></td>
+      <td class="contrib">${esc(l.reason)}</td></tr>`)));
+    box.append(ltbl);
+  }
+
+  // Pull timeline bar chart
+  box.append(el('<h3 class="muted" style="margin:14px 0 6px">📊 Pull health timeline</h3>'));
+  const pulls = ra.pulls||[];
+  const maxHp = Math.max(1,...pulls.map(p=>p.total_health));
+  pulls.forEach(p=>{
+    const pct = Math.round(100*p.total_health/maxHp);
+    const cls = p.has_boss?'fill-boss':'fill-trash';
+    const lustTag = p.bloodlust?' 🔥':'';
+    const bossTag = p.boss_names.length?` (${p.boss_names.join(', ')})`:'';
+    box.append(el(`<div class="pull-bar"><span class="muted">#${p.pull_num}${lustTag}</span>
+      <span class="track"><span class="fill ${cls}" style="width:${pct}%"
+        title="${p.enemy_count} mobs, ${p.total_health.toLocaleString()} HP${bossTag}"></span></span>
+      <span class="muted" style="font-size:11px">${p.enemy_count}m · ${Math.round(p.estimated_duration_s)}s</span></div>`));
+  });
+
+  // Issues
+  const issues = ra.issues||[];
+  if(issues.length){
+    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">⚠️ Issues & recommendations (${ra.issue_counts.critical} critical, ${ra.issue_counts.warning} warnings)</h3>`));
+    issues.forEach(i=>{
+      const sc = i.severity==='critical'?'sev-critical':i.severity==='warning'?'sev-warning':'sev-info';
+      const pullTag = i.pull_num?` <span class="muted">(pull ${i.pull_num})</span>`:'';
+      box.append(el(`<div style="margin:4px 0"><span class="issue-cat">${esc(i.category)}</span>
+        <span class="${sc}">${esc(i.message)}</span>${pullTag}
+        <div class="contrib" style="margin-left:60px">${esc(i.detail)}</div></div>`));
+    });
+  }
+}
+rsel.onchange = renderRoute;
+if(Object.keys(routeAnalyses).length) renderRoute();
+})();
 </script></body></html>
 """

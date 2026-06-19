@@ -1,0 +1,40 @@
+# Nexus-Point Xenas — keystone.guru route: x7xlbdZ
+# Paste the SimC export from keystone.guru below (key level 12).
+# In keystone.guru: open route → Simulate button → select key level 12 → copy string.
+
+fight_style=DungeonRoute
+override.bloodlust=0
+override.arcane_intellect=0
+override.power_word_fortitude=0
+override.mark_of_the_wild=0
+override.battle_shout=0
+override.mystic_touch=0
+override.chaos_brand=0
+override.skyfury=0
+override.hunters_mark=0
+override.bleeding=0
+single_actor_batch=1
+max_time=1800
+enemy="Skandar Tank - Nexus-Point Xenas (+10 / +15)"
+enemy_health=999999
+keystone_level=12
+raid_events=/invulnerable,cooldown=5160,duration=5160,retarget=1
+raid_events+=/pull,pull=01,bloodlust=0,delay=027,enemies="shadowguard-defender_1":1103820|"shadowguard-defender_2":1103820|"shadowguard-defender_3":1103820|"corewright-arcanist_1":1038889|"corewright-arcanist_2":1038889|"hollowsoul-scrounger_1":865741|"hollowsoul-scrounger_2":865741|"lingering-image_1":1579978|"lingering-image_2":1579978|"core-technician_1":380926
+raid_events+=/pull,pull=02,bloodlust=0,delay=022,enemies="shadowguard-defender_1":1103820|"shadowguard-defender_2":1103820|"corewright-arcanist_1":1038889|"flux-engineer_1":1082177|"flux-engineer_2":1082177|"flux-engineer_3":1082177|"nexus-adept_1":541089
+raid_events+=/pull,pull=03,bloodlust=0,delay=009,enemies="shadowguard-defender_1":1103820|"shadowguard-defender_2":1103820|"shadowguard-defender_3":1103820|"nexus-adept_1":541089|"corewright-arcanist_1":1038889|"circuit-seer_1":1558333
+raid_events+=/pull,pull=04,bloodlust=0,delay=007,enemies="shadowguard-defender_1":1103820|"shadowguard-defender_2":1103820|"shadowguard-defender_3":1103820|"shadowguard-defender_4":1103820|"corewright-arcanist_1":1038889|"corewright-arcanist_2":1038889|"nexus-adept_1":541089
+raid_events+=/pull,pull=05,bloodlust=0,delay=010,enemies="corewright-arcanist_1":1038889|"flux-engineer_1":1082177|"flux-engineer_2":1082177|"flux-engineer_3":1082177|"nexus-adept_1":541089|"shadowguard-defender_1":1103820
+raid_events+=/pull,pull=06,bloodlust=0,delay=007,enemies="corewright-arcanist_1":1038889|"corewright-arcanist_2":1038889|"circuit-seer_1":1558333
+raid_events+=/pull,pull=07,bloodlust=0,delay=008,enemies="BOSS_kasreth_1":7101786
+raid_events+=/pull,pull=08,bloodlust=0,delay=068,enemies="shadowguard-defender_1":1103820|"shadowguard-defender_2":1103820|"reformed-voidling_1":454514|"reformed-voidling_2":454514|"reformed-voidling_3":454514|"reformed-voidling_4":454514|"cursed-voidcaller_1":432870|"grand-nullifier_1":1082177|"duskfright-herald_1":1385185
+raid_events+=/pull,pull=09,bloodlust=0,delay=009,enemies="reformed-voidling_1":454514|"reformed-voidling_2":454514|"grand-nullifier_1":1082177|"cursed-voidcaller_1":432870|"cursed-voidcaller_2":432870|"null-sentinel_1":1731483
+raid_events+=/pull,pull=10,bloodlust=0,delay=006,enemies="reformed-voidling_1":454514|"reformed-voidling_2":454514|"grand-nullifier_1":1082177|"hollowsoul-scrounger_1":865741|"hollowsoul-scrounger_2":865741|"hollowsoul-scrounger_3":865741|"null-sentinel_1":1731483
+raid_events+=/pull,pull=11,bloodlust=0,delay=008,enemies="reformed-voidling_1":454514|"reformed-voidling_2":454514|"cursed-voidcaller_1":432870|"cursed-voidcaller_2":432870|"grand-nullifier_1":1082177|"hollowsoul-scrounger_1":865741|"hollowsoul-scrounger_2":865741|"duskfright-herald_1":1385185
+raid_events+=/pull,pull=12,bloodlust=0,delay=007,enemies="hollowsoul-scrounger_1":865741|"hollowsoul-scrounger_2":865741|"hollowsoul-scrounger_3":865741|"hollowsoul-scrounger_4":865741|"hollowsoul-scrounger_5":865741|"hollowsoul-scrounger_6":865741|"hollowsoul-scrounger_7":865741|"hollowsoul-scrounger_8":865741|"dreadflail_1":1839701
+raid_events+=/pull,pull=13,bloodlust=0,delay=020,enemies="reformed-voidling_1":454514|"reformed-voidling_2":454514|"reformed-voidling_3":454514|"hollowsoul-scrounger_1":865741|"hollowsoul-scrounger_2":865741|"hollowsoul-scrounger_3":865741|"cursed-voidcaller_1":432870|"null-sentinel_1":1731483|"BOSS_corewarden-nysarra_1":22545354|"BOSS_corewarden-nysarra_1":51944499|"BOSS_corewarden-nysarra_2":51944499|"BOSS_corewarden-nysarra_3":51944499|"duskfright-herald_1":1385185
+raid_events+=/pull,pull=14,bloodlust=0,delay=013,enemies="reformed-voidling_1":454514|"reformed-voidling_2":454514|"grand-nullifier_1":1082177|"grand-nullifier_2":1082177|"lingering-image_1":1579978
+raid_events+=/pull,pull=15,bloodlust=0,delay=041,enemies="lingering-image_1":1579978|"radiant-swarm_1":378762|"radiant-swarm_2":378762|"radiant-swarm_3":378762|"radiant-swarm_4":378762|"flarebat_1":1579978|"flarebat_2":1579978
+raid_events+=/pull,pull=16,bloodlust=0,delay=010,enemies="lightwrought_1":919850|"lightwrought_2":919850|"flarebat_1":1579978
+raid_events+=/pull,pull=17,bloodlust=0,delay=010,enemies="radiant-swarm_1":378762|"radiant-swarm_2":378762|"radiant-swarm_3":378762|"radiant-swarm_4":378762|"lightwrought_1":919850|"flarebat_1":1579978|"lingering-image_1":1579978
+raid_events+=/pull,pull=18,bloodlust=0,delay=012,enemies="lingering-image_1":1579978|"lightwrought_1":919850|"flarebat_1":1579978|"radiant-swarm_1":378762|"radiant-swarm_2":378762
+raid_events+=/pull,pull=19,bloodlust=0,delay=009,enemies="fractured-image_1":86097|"fractured-image_2":86097|"fractured-image_1":80808|"fractured-image_2":80808|"BOSS_lothraxion_1":9018141

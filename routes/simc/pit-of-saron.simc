@@ -1,0 +1,40 @@
+# Pit of Saron — keystone.guru route: mPZiMk1
+# Paste the SimC export from keystone.guru below (key level 12).
+# In keystone.guru: open route → Simulate button → select key level 12 → copy string.
+
+fight_style=DungeonRoute
+override.bloodlust=0
+override.arcane_intellect=0
+override.power_word_fortitude=0
+override.mark_of_the_wild=0
+override.battle_shout=0
+override.mystic_touch=0
+override.chaos_brand=0
+override.skyfury=0
+override.hunters_mark=0
+override.bleeding=0
+single_actor_batch=1
+max_time=1800
+enemy="Sha Easy Route"
+enemy_health=999999
+keystone_level=12
+raid_events=/invulnerable,cooldown=5160,duration=5160,retarget=1
+raid_events+=/pull,pull=01,bloodlust=0,delay=011,enemies="wrathbone-enforcer_1":1190395|"wrathbone-enforcer_2":1190395|"wrathbone-enforcer_3":1190395|"gloombound-shadebringer_1":973959|"quarry-tormentor_1":1190395|"quarry-tormentor_2":1190395|"rotting-ghoul_1":1082177|"rotting-ghoul_2":1082177|"ymirjar-graveblade_1":1947918|"leaping-geist_1":541089|"leaping-geist_2":541089|"dreadpulse-lich_1":1623266
+raid_events+=/pull,pull=02,bloodlust=0,delay=011,enemies="wrathbone-enforcer_1":1190395|"wrathbone-enforcer_2":1190395|"gloombound-shadebringer_1":973959|"quarry-tormentor_1":1190395|"deathwhisper-necrolyte_1":973959|"plungetalon-gargoyle_1":865741|"risen-soldier_1":238079|"risen-soldier_2":238079|"arcanist-cadaver_1":973959
+raid_events+=/pull,pull=03,bloodlust=0,delay=008,enemies="quarry-tormentor_1":1190395|"rotting-ghoul_1":1082177|"leaping-geist_1":541089|"wrathbone-enforcer_1":1190395|"wrathbone-enforcer_2":1190395
+raid_events+=/pull,pull=04,bloodlust=0,delay=013,enemies="dreadpulse-lich_1":1623266|"wrathbone-enforcer_1":1190395|"wrathbone-enforcer_2":1190395|"quarry-tormentor_1":1190395|"quarry-tormentor_2":1190395|"lumbering-plaguehorror_1":1298612|"lumbering-plaguehorror_2":1298612|"plungetalon-gargoyle_1":865741|"rotting-ghoul_1":1082177|"ymirjar-graveblade_1":1947918
+raid_events+=/pull,pull=05,bloodlust=0,delay=013,enemies="deathwhisper-necrolyte_1":973959|"risen-soldier_1":238079|"risen-soldier_2":238079|"risen-soldier_3":238079|"arcanist-cadaver_1":973959|"iceborn-proto-drake_1":1298612|"ymirjar-graveblade_1":1947918|"wrathbone-enforcer_1":1190395|"wrathbone-enforcer_2":1190395
+raid_events+=/pull,pull=06,bloodlust=0,delay=013,enemies="quarry-tormentor_1":1190395|"quarry-tormentor_2":1190395|"dreadpulse-lich_1":1623266|"wrathbone-enforcer_1":1190395|"leaping-geist_1":541089|"leaping-geist_2":541089|"leaping-geist_3":541089|"rotting-ghoul_1":1082177|"gloombound-shadebringer_1":973959|"plungetalon-gargoyle_1":865741
+raid_events+=/pull,pull=07,bloodlust=0,delay=013,enemies="gloombound-shadebringer_1":973959|"rotting-ghoul_1":1082177|"rotting-ghoul_2":1082177|"leaping-geist_1":541089|"leaping-geist_2":541089|"leaping-geist_3":541089|"leaping-geist_4":541089|"leaping-geist_5":541089|"leaping-geist_6":541089|"plungetalon-gargoyle_1":865741
+raid_events+=/pull,pull=08,bloodlust=0,delay=010,enemies="quarry-tormentor_1":1190395|"ymirjar-graveblade_1":1947918|"iceborn-proto-drake_1":1298612|"rimebone-coldwraith_1":973959|"rotting-ghoul_1":1082177|"wrathbone-enforcer_1":1190395
+raid_events+=/pull,pull=09,bloodlust=0,delay=011,enemies="BOSS_forgemaster-garfrost_1":8454508
+raid_events+=/pull,pull=10,bloodlust=0,delay=017,enemies="deathwhisper-necrolyte_1":973959|"risen-soldier_1":238079|"risen-soldier_2":238079|"risen-soldier_3":238079|"arcanist-cadaver_1":973959|"quarry-tormentor_1":1190395|"rimebone-coldwraith_1":973959|"dreadpulse-lich_1":1623266
+raid_events+=/pull,pull=11,bloodlust=0,delay=017,enemies="deathwhisper-necrolyte_1":973959|"risen-soldier_1":238079|"risen-soldier_2":238079|"arcanist-cadaver_1":973959|"quarry-tormentor_1":1190395|"rimebone-coldwraith_1":973959|"iceborn-proto-drake_1":1298612|"ymirjar-graveblade_1":1947918|"rotting-ghoul_1":1082177|"wrathbone-enforcer_1":1190395|"leaping-geist_1":541089
+raid_events+=/pull,pull=12,bloodlust=0,delay=011,enemies="leaping-geist_1":541089|"leaping-geist_2":541089|"leaping-geist_3":541089|"leaping-geist_4":541089|"rimebone-coldwraith_1":973959|"plungetalon-gargoyle_1":865741|"rotting-ghoul_1":1082177|"rotting-ghoul_2":1082177|"rotting-ghoul_3":1082177
+raid_events+=/pull,pull=13,bloodlust=0,delay=011,enemies="BOSS_krick_1":9919955|"BOSS_ick_1":9919955|"shade-of-krick_1":261526
+raid_events+=/pull,pull=14,bloodlust=0,delay=010,enemies="quarry-tormentor_1":1190395|"ymirjar-graveblade_1":1947918|"ymirjar-graveblade_2":1947918|"rimebone-coldwraith_1":973959
+raid_events+=/pull,pull=15,bloodlust=0,delay=008,enemies="gloombound-shadebringer_1":973959|"rotting-ghoul_1":1082177|"rotting-ghoul_2":1082177|"rotting-ghoul_3":1082177|"leaping-geist_1":541089|"leaping-geist_2":541089|"leaping-geist_3":541089
+raid_events+=/pull,pull=16,bloodlust=0,delay=010,enemies="ymirjar-graveblade_1":1947918|"leaping-geist_1":541089|"leaping-geist_2":541089|"leaping-geist_3":541089|"leaping-geist_4":541089|"leaping-geist_5":541089|"dreadpulse-lich_1":1623266
+raid_events+=/pull,pull=17,bloodlust=0,delay=008,enemies="leaping-geist_1":541089|"leaping-geist_2":541089|"leaping-geist_3":541089|"leaping-geist_4":541089|"leaping-geist_5":541089|"leaping-geist_6":541089|"leaping-geist_7":541089|"rimebone-coldwraith_1":973959
+raid_events+=/pull,pull=18,bloodlust=0,delay=012,enemies="glacieth_1":3895837
+raid_events+=/pull,pull=19,bloodlust=0,delay=038,enemies="BOSS_scourgelord-tyrannus_1":8341781|"BOSS_rimefang_1":9018141|"rotling_1":225453|"rotling_2":225453|"scourge-plaguespreader_1":676360|"scourge-plaguespreader_2":676360|"scourge-plaguespreader_3":676360

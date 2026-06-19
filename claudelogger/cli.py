@@ -11,9 +11,9 @@ import sys
 
 import re
 
-from . import fetch, keystone, knowledge, mdt, report
+from . import fetch, keystone, knowledge, mdt, report, simc, route_analysis
 from .classify import classify_fight
-from .config import Config, REPO_ROOT
+from .config import Config, DUNGEON_SLUGS, REPO_ROOT
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
 from .wcl import WCLClient
 
@@ -189,6 +189,197 @@ def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None) -
         print(f"Pages copy: {docs_index} (commit & push to update the live site)")
 
 
+def cmd_simc(args) -> int:
+    """Run SimC profiles against dungeon routes and produce sim results + route analysis."""
+    cfg = Config.load()
+    client = WCLClient(cfg.client_id, cfg.client_secret, cfg.cache_dir)
+
+    # Determine which report to pull profiles from
+    if args.report:
+        report_code = args.report
+    else:
+        # Auto-detect latest report
+        reports = fetch.discover_reports(client, cfg.character_id, 1)
+        if not reports:
+            print("No recent reports found. Use --report <CODE> to specify.", file=sys.stderr)
+            return 1
+        report_code = reports[0]["code"]
+        print(f"Using latest report: {report_code}", file=sys.stderr)
+
+    # Fetch report and find the latest M+ fight
+    rep = fetch.get_report(client, report_code)
+    mplus = [f for f in rep.fights if f.keystone_level > 0]
+    if args.fight:
+        mplus = [f for f in mplus if f.id == args.fight]
+    if not mplus:
+        print("No M+ fights found in this report.", file=sys.stderr)
+        return 1
+
+    fight = mplus[-1]  # latest fight
+    print(f"Extracting profiles from {report_code} fight {fight.id}: {fight.name} +{fight.keystone_level}", file=sys.stderr)
+
+    # Extract player profiles from WCL combatantInfo
+    combatant_events = fetch.fetch_combatant_info(client, report_code, fight)
+    if not combatant_events:
+        print("No combatantInfo events found — WCL may not have gear data for this report.", file=sys.stderr)
+        return 1
+
+    profiles = simc.extract_profiles(combatant_events, rep.actors, fight.friendly_players)
+    if not profiles:
+        print("Could not extract any player profiles.", file=sys.stderr)
+        return 1
+
+    print(f"Extracted {len(profiles)} profiles: {', '.join(p.name for p in profiles)}", file=sys.stderr)
+
+    # Write standalone profiles for reference
+    profiles_dir = cfg.out_dir / "simc" / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    for p in profiles:
+        ppath = profiles_dir / f"{p.name.lower()}.simc"
+        ppath.write_text(p.to_simc(), encoding="utf-8")
+        print(f"  profile: {ppath}", file=sys.stderr)
+
+    # Determine which dungeons to sim
+    if args.dungeon:
+        q = args.dungeon.lower()
+        dungeons = [d for d in DUNGEON_SLUGS if q in d.lower()]
+        if not dungeons:
+            print(f"No dungeon matching '{args.dungeon}'. Available: {', '.join(sorted(DUNGEON_SLUGS))}", file=sys.stderr)
+            return 1
+    else:
+        # All dungeons that have route files populated
+        dungeons = []
+        for dname, slug in DUNGEON_SLUGS.items():
+            route_text = simc.load_route_events(cfg.routes_simc_dir, dname)
+            if route_text:
+                dungeons.append(dname)
+        if not dungeons:
+            print("No populated route files found in routes/simc/. Export routes from keystone.guru first.", file=sys.stderr)
+            return 1
+
+    print(f"\nSimming {len(dungeons)} dungeon(s): {', '.join(dungeons)}", file=sys.stderr)
+
+    # Overrides directory
+    overrides_dir = cfg.routes_simc_dir.parent / "overrides"
+
+    # Run sims and route analysis per dungeon
+    all_sim_results: list[simc.SimcResult] = []
+    all_route_analyses: dict[str, dict] = {}
+
+    for dungeon in dungeons:
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"  {dungeon}", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+
+        # Route analysis (doesn't need simc binary)
+        route_text = simc.load_route_events(cfg.routes_simc_dir, dungeon)
+        if route_text:
+            # Run sims if --no-sim not set
+            dungeon_results = []
+            if not args.no_sim:
+                dungeon_results = simc.run_dungeon_sims(
+                    profiles, dungeon, cfg,
+                    overrides_dir if overrides_dir.exists() else None,
+                )
+                all_sim_results.extend(dungeon_results)
+
+            # Route analysis with or without sim results
+            ra = route_analysis.analyze_route(
+                route_text, dungeon, cfg.simc,
+                dungeon_results if dungeon_results else None,
+            )
+            all_route_analyses[dungeon] = ra
+
+            # Print summary
+            if ra.get("issues"):
+                for issue in ra["issues"]:
+                    sev = issue["severity"].upper()
+                    print(f"  [{sev}] {issue['message']}", file=sys.stderr)
+
+    # Build summary and emit
+    sim_summary = simc.build_simc_summary(all_sim_results)
+
+    # Write results
+    _emit_simc(cfg, sim_summary, all_route_analyses, profiles)
+    return 0
+
+
+def _emit_simc(
+    cfg: Config,
+    sim_summary: dict,
+    route_analyses: dict[str, dict],
+    profiles: list[simc.PlayerProfile],
+) -> None:
+    """Write simc results to JSON and integrate into the dashboard."""
+    import json
+
+    simc_data = {
+        "sim_results": sim_summary,
+        "route_analyses": route_analyses,
+        "profiles": {p.name: {"spec": p.spec, "class": p.simc_class, "role": p.role} for p in profiles},
+    }
+
+    # Write standalone simc JSON
+    simc_json_path = cfg.out_dir / "simc_analysis.json"
+    simc_json_path.write_text(json.dumps(simc_data, indent=2), encoding="utf-8")
+    print(f"\nSimC JSON: {simc_json_path}")
+
+    # Merge into existing analysis.json if it exists
+    analysis_path = cfg.out_dir / "analysis.json"
+    if analysis_path.exists():
+        try:
+            existing = json.loads(analysis_path.read_text(encoding="utf-8"))
+            existing["simc"] = simc_data
+            analysis_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+            print(f"Updated:   {analysis_path} (added simc section)")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Regenerate dashboard with simc data
+    if analysis_path.exists():
+        try:
+            full = json.loads(analysis_path.read_text(encoding="utf-8"))
+            season = full.get("season", {})
+            runs = full.get("runs", [])
+            briefings = full.get("briefings", {})
+            hpath = report.write_html(cfg.out_dir, season, runs, briefings, simc_data)
+            report.write_html_artifact(cfg.out_dir, season, runs, briefings, simc_data)
+            print(f"Dashboard: {hpath}")
+        except (json.JSONDecodeError, OSError, TypeError):
+            pass
+
+    # Print sim summary
+    if sim_summary:
+        print(f"\n=== SIM SUMMARY ===")
+        print(f"Total sims: {sim_summary.get('total_sims', 0)}")
+        for dungeon, ds in sim_summary.get("by_dungeon", {}).items():
+            print(f"\n  {dungeon}: group DPS = {ds['group_dps']:,.0f}")
+            for p in ds["players"]:
+                role_tag = f"[{p['role']}]" if p['role'] == 'tank' else ""
+                print(f"    {p['player']:15s} {p['spec']:15s} {p['dps']:>10,.0f} DPS {role_tag}")
+
+    # Print route analysis summary
+    if route_analyses:
+        print(f"\n=== ROUTE ANALYSIS ===")
+        for dungeon, ra in route_analyses.items():
+            issues = ra.get("issues", [])
+            crit = sum(1 for i in issues if i["severity"] == "critical")
+            warn = sum(1 for i in issues if i["severity"] == "warning")
+            timer = ra.get("timer", {})
+            margin = timer.get("margin_s", 0)
+            deaths = timer.get("death_budget", 0)
+            lust = ra.get("lust_recommendations", [])
+            lust_pulls = [l["pull_num"] for l in lust[:3]]
+            print(f"\n  {dungeon}:")
+            print(f"    Timer margin: {margin:+.0f}s ({deaths} deaths budget)")
+            if lust_pulls:
+                print(f"    Optimal lust: pulls {lust_pulls}")
+            if crit:
+                print(f"    {crit} CRITICAL issue(s)")
+            if warn:
+                print(f"    {warn} warning(s)")
+
+
 def cmd_briefing(args) -> int:
     """Print a dungeon's pre-run briefing to the terminal (from the last analysis)."""
     import json
@@ -226,6 +417,13 @@ def main(argv: list[str] | None = None) -> int:
     ps = sub.add_parser("season", help="Discover and analyze recent reports for the character.")
     ps.add_argument("--limit", type=int, default=25)
     ps.set_defaults(func=cmd_season)
+
+    psc = sub.add_parser("simc", help="Run SimC sims per player per dungeon route.")
+    psc.add_argument("--report", default=None, help="WCL report code to pull gear/talents from (default: latest).")
+    psc.add_argument("--fight", type=int, default=None, help="Specific fight ID for profile extraction.")
+    psc.add_argument("--dungeon", default=None, help="Dungeon name substring (default: all with route files).")
+    psc.add_argument("--no-sim", action="store_true", help="Route analysis only, skip running simc binary.")
+    psc.set_defaults(func=cmd_simc)
 
     pb = sub.add_parser("briefing", help="Print a dungeon's pre-run briefing (after report/season).")
     pb.add_argument("dungeon", nargs="?", default="", help="Dungeon name (substring match); omit for all.")

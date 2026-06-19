@@ -1,0 +1,44 @@
+# Magisters' Terrace — keystone.guru route: gPJe7sy
+# Paste the SimC export from keystone.guru below (key level 12).
+# In keystone.guru: open route → Simulate button → select key level 12 → copy string.
+
+fight_style=DungeonRoute
+override.bloodlust=0
+override.arcane_intellect=0
+override.power_word_fortitude=0
+override.mark_of_the_wild=0
+override.battle_shout=0
+override.mystic_touch=0
+override.chaos_brand=0
+override.skyfury=0
+override.hunters_mark=0
+override.bleeding=0
+single_actor_batch=1
+max_time=2040
+enemy="Sha Easy Route (kinda)"
+enemy_health=999999
+keystone_level=12
+raid_events=/invulnerable,cooldown=5160,duration=5160,retarget=1
+raid_events+=/pull,pull=01,bloodlust=0,delay=011,enemies="arcane-magister_1":973959|"arcane-magister_2":973959|"arcane-sentry_1":2597225|"sunblade-enforcer_1":1082177|"sunblade-enforcer_2":1082177
+raid_events+=/pull,pull=02,bloodlust=0,delay=008,enemies="arcane-magister_1":973959|"arcane-magister_2":973959|"animated-codex_1":7125|"animated-codex_2":7125|"sunblade-enforcer_1":1082177|"sunblade-enforcer_2":1082177|"sunblade-enforcer_3":1082177|"lightward-healer_1":919850|"lightward-healer_2":919850
+raid_events+=/pull,pull=03,bloodlust=0,delay=008,enemies="blazing-pyromancer_1":1731483|"animated-codex_1":7125|"animated-codex_2":7125|"animated-codex_3":7125
+raid_events+=/pull,pull=04,bloodlust=0,delay=013,enemies="arcane-magister_1":973959|"sunblade-enforcer_1":1082177|"lightward-healer_1":919850|"arcane-sentry_1":2597225|"spellwoven-familiar_1":757524
+raid_events+=/pull,pull=05,bloodlust=0,delay=012,enemies="arcane-magister_1":973959|"brightscale-wyrm_1":216435|"brightscale-wyrm_2":216435|"brightscale-wyrm_3":216435|"brightscale-wyrm_4":216435|"brightscale-wyrm_5":216435|"brightscale-wyrm_6":216435|"blazing-pyromancer_1":1731483|"lightward-healer_1":919850|"spellwoven-familiar_1":757524|"spellwoven-familiar_2":757524
+raid_events+=/pull,pull=06,bloodlust=0,delay=008,enemies="BOSS_arcanotron-custos_1":9018141|"brightscale-wyrm_1":216435|"brightscale-wyrm_2":216435|"brightscale-wyrm_3":216435|"brightscale-wyrm_4":216435|"brightscale-wyrm_5":216435|"brightscale-wyrm_6":216435|"brightscale-wyrm_7":216435|"brightscale-wyrm_8":216435|"brightscale-wyrm_9":216435|"brightscale-wyrm_10":216435|"brightscale-wyrm_11":216435|"brightscale-wyrm_12":216435
+raid_events+=/pull,pull=07,bloodlust=0,delay=005,enemies="brightscale-wyrm_1":216435|"brightscale-wyrm_2":216435|"brightscale-wyrm_3":216435|"brightscale-wyrm_4":216435|"brightscale-wyrm_5":216435|"brightscale-wyrm_6":216435|"brightscale-wyrm_7":216435|"brightscale-wyrm_8":216435|"brightscale-wyrm_9":216435|"brightscale-wyrm_10":216435|"brightscale-wyrm_11":216435|"brightscale-wyrm_12":216435
+raid_events+=/pull,pull=08,bloodlust=0,delay=011,enemies="brightscale-wyrm_1":216435|"brightscale-wyrm_2":216435|"brightscale-wyrm_3":216435|"brightscale-wyrm_4":216435|"brightscale-wyrm_5":216435|"brightscale-wyrm_6":216435|"brightscale-wyrm_7":216435|"brightscale-wyrm_8":216435|"brightscale-wyrm_9":216435|"brightscale-wyrm_10":216435|"brightscale-wyrm_11":216435|"brightscale-wyrm_12":216435
+raid_events+=/pull,pull=09,bloodlust=0,delay=022,enemies="arcane-magister_1":973959|"runed-spellbreaker_1":1947918|"sunblade-enforcer_1":1082177|"sunblade-enforcer_2":1082177|"lightward-healer_1":919850|"lightward-healer_2":919850
+raid_events+=/pull,pull=10,bloodlust=0,delay=002,enemies="arcane-magister_1":973959|"runed-spellbreaker_1":1947918|"sunblade-enforcer_1":1082177|"sunblade-enforcer_2":1082177|"lightward-healer_1":919850|"spellwoven-familiar_1":757524|"spellwoven-familiar_2":757524
+raid_events+=/pull,pull=10,bloodlust=0,delay=005,enemies="runed-spellbreaker_1":1947918|"runed-spellbreaker_2":1947918|"lightward-healer_1":919850
+raid_events+=/pull,pull=11,bloodlust=0,delay=002,enemies="seranel-sunlash_1":7890874
+raid_events+=/pull,pull=12,bloodlust=0,delay=010,enemies="voidling_1":432870|"voidling_2":432870|"voidling_3":432870|"voidling_4":432870|"voidling_5":432870|"voidling_6":432870|"voidling_7":432870|"voidling_8":432870|"voidling_9":432870|"voidling_10":432870|"voidling_11":432870|"voidling_12":432870|"hollowsoul-shredder_1":1028068|"hollowsoul-shredder_2":1028068|"hollowsoul-shredder_3":1028068|"hollowsoul-shredder_4":1028068|"hollowsoul-shredder_5":1028068|"dreadful-voidwalker_1":1190395
+raid_events+=/pull,pull=13,bloodlust=0,delay=020,enemies="hollowsoul-shredder_1":1028068|"hollowsoul-shredder_2":1028068|"void-terror_1":973959|"unstable-voidling_1":162326|"unstable-voidling_2":162326|"unstable-voidling_3":162326|"unstable-voidling_4":162326|"unstable-voidling_5":162326|"unstable-voidling_6":162326|"shadowrift-voidcaller_1":1731483
+raid_events+=/pull,pull=15,bloodlust=0,delay=009,enemies="voidling_1":432870|"voidling_2":432870|"voidling_3":432870|"voidling_4":432870|"voidling_5":432870|"voidling_6":432870|"voidling_7":432870|"voidling_8":432870|"voidling_9":432870|"voidling_10":432870|"void-terror_1":973959|"void-terror_2":973959
+raid_events+=/pull,pull=16,bloodlust=0,delay=008,enemies="dreadful-voidwalker_1":1190395|"void-terror_1":973959|"voidling_1":432870|"voidling_2":432870|"voidling_3":432870|"voidling_4":432870|"voidling_5":432870|"voidling_6":432870|"voidling_7":432870|"voidling_8":432870|"shadowrift-voidcaller_1":1731483
+raid_events+=/pull,pull=17,bloodlust=0,delay=006,enemies="hollowsoul-shredder_1":1028068|"hollowsoul-shredder_2":1028068|"devouring-tyrant_1":1947918|"void-terror_1":973959|"dreadful-voidwalker_1":1190395|"dreadful-voidwalker_2":1190395
+raid_events+=/pull,pull=18,bloodlust=0,delay=012,enemies="BOSS_gemellus_1":12399944|"celestial-drifter_1":1298612|"BOSS_gemellus_1":12399944
+raid_events+=/pull,pull=19,bloodlust=0,delay=013,enemies="voidling_1":432870|"voidling_2":432870|"voidling_3":432870|"voidling_4":432870|"voidling_5":432870|"voidling_6":432870|"voidling_7":432870|"voidling_8":432870|"voidling_9":432870|"hollowsoul-shredder_1":1028068|"hollowsoul-shredder_2":1028068|"void-terror_1":973959|"void-terror_2":973959|"hollowsoul-shredder_1":1028068
+raid_events+=/pull,pull=20,bloodlust=0,delay=009,enemies="voidling_1":432870|"voidling_2":432870|"voidling_3":432870|"voidling_4":432870|"voidling_5":432870|"voidling_6":432870|"voidling_7":432870|"voidling_8":432870
+raid_events+=/pull,pull=21,bloodlust=0,delay=004,enemies="voidling_1":432870|"voidling_2":432870|"voidling_3":432870|"voidling_4":432870|"voidling_5":432870|"voidling_6":432870|"voidling_7":432870|"voidling_8":432870|"voidling_9":432870|"voidling_10":432870|"hollowsoul-shredder_1":1028068|"hollowsoul-shredder_2":1028068|"hollowsoul-shredder_3":1028068|"void-terror_1":973959|"void-terror_2":973959
+raid_events+=/pull,pull=22,bloodlust=0,delay=008,enemies="shadowrift-voidcaller_1":1731483|"devouring-tyrant_1":1947918
+raid_events+=/pull,pull=23,bloodlust=0,delay=011,enemies="BOSS_degentrius_1":9018141

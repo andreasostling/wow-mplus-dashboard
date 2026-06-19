@@ -82,14 +82,53 @@ class Knobs:
     wipe_keep: int = 2
 
 
+# Dungeon timers (seconds) — Midnight Season 1 M+.
+DUNGEON_TIMERS: dict[str, int] = {
+    "Algeth'ar Academy": 1800,
+    "Magisters' Terrace": 2040,
+    "Maisara Caverns": 1980,
+    "Nexus-Point Xenas": 1800,
+    "Pit of Saron": 1680,
+    "Seat of the Triumvirate": 1800,
+    "Skyreach": 1680,
+    "Windrunner Spire": 1980,
+}
+
+# Map dungeon name → slug used for route .simc file names.
+DUNGEON_SLUGS: dict[str, str] = {
+    "Algeth'ar Academy": "algethar-academy",
+    "Magisters' Terrace": "magisters-terrace",
+    "Maisara Caverns": "maisara-caverns",
+    "Nexus-Point Xenas": "nexus-point-xenas",
+    "Pit of Saron": "pit-of-saron",
+    "Seat of the Triumvirate": "seat-of-the-triumvirate",
+    "Skyreach": "skyreach",
+    "Windrunner Spire": "windrunner-spire",
+}
+
+
+@dataclass
+class SimcKnobs:
+    """SimulationCraft integration tunables."""
+    simc_binary: str = "simc"               # path to the simc executable
+    key_level: int = 12                      # default key level for sims
+    lust_cd_s: int = 600                     # bloodlust exhaustion debuff (10 min)
+    lust_duration_s: int = 40                # bloodlust buff duration
+    default_iterations: int = 5000           # simc iteration count
+    target_error: float = 0.2               # simc target_error (%)
+    threads: int = 0                         # 0 = let simc auto-detect
+
+
 @dataclass
 class Config:
     client_id: str
     client_secret: str
     character_id: int
     knobs: Knobs = field(default_factory=Knobs)
+    simc: SimcKnobs = field(default_factory=SimcKnobs)
     cache_dir: Path = REPO_ROOT / "cache"
     out_dir: Path = REPO_ROOT / "out"
+    routes_simc_dir: Path = REPO_ROOT / "routes" / "simc"
     mdt_expansion: str = "Midnight"  # which MDT expansion folder to ingest
 
     @classmethod
@@ -105,6 +144,14 @@ class Config:
         char = int(env.get("WCL_CHARACTER_ID", "0") or "0")
         cfg = cls(client_id=cid, client_secret=secret, character_id=char)
         cfg.mdt_expansion = env.get("CLAUDELOGGER_MDT_EXPANSION", cfg.mdt_expansion)
+        if sb := env.get("CLAUDELOGGER_SIMC_BINARY"):
+            cfg.simc.simc_binary = sb
+        if kl := env.get("CLAUDELOGGER_SIMC_KEY_LEVEL"):
+            cfg.simc.key_level = int(kl)
+        if it := env.get("CLAUDELOGGER_SIMC_ITERATIONS"):
+            cfg.simc.default_iterations = int(it)
+        if th := env.get("CLAUDELOGGER_SIMC_THREADS"):
+            cfg.simc.threads = int(th)
         cfg.cache_dir.mkdir(exist_ok=True)
         cfg.out_dir.mkdir(exist_ok=True)
         return cfg
