@@ -144,16 +144,28 @@ function renderBriefing(){
   const rt=b.route;
   if(rt){
     const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
-    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — kick targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
+    box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
     if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
-    else if(!(rt.kick_targets||[]).length){ box.append(el('<div class="muted">No interruptible casters on the planned route.</div>')); }
+    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
     else{
-      const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
-      const rb=rtbl.querySelector('tbody');
-      rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
-        <td class="contrib"><span class="lever">${esc((kt.spells||[]).join(', '))}</span></td>
-        <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-      box.append(rtbl);
+      if((rt.kick_targets||[]).length){
+        box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
+        const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const rb=rtbl.querySelector('tbody');
+        rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
+          <td class="contrib"><span class="lever">${esc((kt.spells||[]).join(', '))}</span></td>
+          <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        box.append(rtbl);
+      }
+      if((rt.stop_targets||[]).length){
+        box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
+        const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const sb=stbl.querySelector('tbody');
+        rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
+          <td class="contrib"><span class="lever">${esc((st.spells||[]).join(', '))}</span></td>
+          <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        box.append(stbl);
+      }
     }
     // off-route mobs
     const offRoute = rt.off_route_mobs || [];
