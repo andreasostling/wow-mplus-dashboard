@@ -138,6 +138,14 @@ def pull_cc_tally(pull: Pull, fe: FightEvents, rep: ReportData, kb: AbilityKnowl
         elif kind in STUN_LIKE_KINDS:
             comp_stuns += 1
 
+    # Resolve npc_game_id → name for each mob type in this pull.
+    npc_names: dict[int, str] = {}
+    for gid in pull.npc_game_ids:
+        for a in actors.values():
+            if a.game_id == gid and not a.is_player:
+                npc_names[gid] = a.name
+                break
+
     return {
         "pull": pull.index,
         "start_ms": s,
@@ -145,6 +153,8 @@ def pull_cc_tally(pull: Pull, fe: FightEvents, rep: ReportData, kb: AbilityKnowl
         "duration_s": round(pull.duration_ms / 1000, 1),
         "deaths_in_pull": pull.deaths_in_pull,
         "distinct_mobs": len(pull.npc_instances),
+        "npc_game_ids": sorted(pull.npc_game_ids),
+        "npc_names": npc_names,
         "interrupts_demanded": interrupts_kicked + interrupts_leaked,
         "interrupts_kicked": interrupts_kicked,
         "interrupts_leaked": interrupts_leaked,

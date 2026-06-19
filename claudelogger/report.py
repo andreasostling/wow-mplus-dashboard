@@ -239,7 +239,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         }
 
     if route_info:
-        _merge_route_info(out, route_info)
+        _merge_route_info(out, route_info, by_dungeon)
     return out
 
 
@@ -250,7 +250,8 @@ def _empty_briefing(name: str) -> dict[str, Any]:
             "comp_stuns": [], "comp_other_cc": []}
 
 
-def _merge_route_info(out: dict[str, Any], route_info: list[dict]) -> None:
+def _merge_route_info(out: dict[str, Any], route_info: list[dict],
+                      by_dungeon: dict[str, list[dict]] | None = None) -> None:
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     bnorms = {d: norm(d) for d in out}
     for r in route_info:
@@ -270,10 +271,36 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict]) -> None:
             {**th, "deaths_here": death_by_mob.get(th["mob"], 0)} for th in r.get("threats", [])
         ]
         kick_targets.sort(key=lambda x: (-x["deaths_here"], x["mob"]))
+        # Detect off-route mobs: compare NPCs seen in pulls against the route's NPC set.
+        route_npc_set = set(r.get("npc_ids", []))
+        off_route: list[dict] = []
+        matched_runs = by_dungeon.get(match, []) if by_dungeon else []
+        if route_npc_set and matched_runs:
+            for p in (pr for run in matched_runs for pr in run.get("pulls", [])):
+                pull_npcs = set(p.get("npc_game_ids", []))
+                npc_names = p.get("npc_names", {})
+                extras = pull_npcs - route_npc_set
+                for npc_id in extras:
+                    # npc_names keys may be int or str (JSON round-trip).
+                    name = npc_names.get(npc_id) or npc_names.get(str(npc_id)) or f"NPC #{npc_id}"
+                    off_route.append({
+                        "npc_id": npc_id, "mob": name,
+                        "pull": p["pull"], "time_s": round(p["start_ms"] / 1000, 1),
+                    })
+        # Deduplicate: one entry per mob per pull.
+        seen_keys: set[tuple] = set()
+        deduped: list[dict] = []
+        for o in off_route:
+            key = (o["npc_id"], o["pull"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(o)
+
         out[match]["route"] = {
             "label": r["label"], "code": r["code"], "pulls": r.get("pulls", 0),
             "n_npcs": r.get("n_npcs", 0), "ok": r.get("ok", False),
             "error": r.get("error", ""), "kick_targets": kick_targets,
+            "off_route_mobs": deduped,
         }
 
 
@@ -415,8 +442,8 @@ _HTML = r"""<!doctype html>
   .av-yes{color:var(--bad);font-weight:700} .av-no{color:var(--ok)} .av-null{color:var(--mut)}
   .bars{display:flex;flex-direction:column;gap:6px}
   .bar{display:grid;grid-template-columns:180px 1fr 48px;gap:8px;align-items:center}
-  .bar .track{background:#0b0d11;border-radius:5px;height:16px;overflow:hidden}
-  .bar .fill{height:100%;background:var(--accent)}
+  .bar .track{background:var(--line);border-radius:5px;height:16px;overflow:hidden}
+  .bar .fill{height:100%;background:var(--accent);border-radius:5px}
   .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
   select,input{background:var(--card);color:var(--ink);border:1px solid var(--line);
                border-radius:7px;padding:6px 8px}
@@ -539,6 +566,26 @@ function renderBriefing(){
         <td class="contrib"><span class="lever">${esc((kt.spells||[]).join(', '))}</span></td>
         <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
       box.append(rtbl);
+    }
+    // off-route mobs
+    const offRoute = rt.off_route_mobs || [];
+    if(offRoute.length){
+      // Aggregate: count how many pulls each mob appeared in.
+      const mobPulls = {};
+      offRoute.forEach(o => {
+        if(!mobPulls[o.mob]) mobPulls[o.mob] = {npc_id:o.npc_id, pulls:[]};
+        mobPulls[o.mob].pulls.push(o.pull);
+      });
+      const sorted = Object.entries(mobPulls).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
+      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">⚠️ Off-route mobs — pulled but not on your planned route</h3>`));
+      const otbl=el('<table><thead><tr><th>Mob</th><th>Pull #(s)</th><th>Wowhead</th></tr></thead><tbody></tbody></table>');
+      const ob=otbl.querySelector('tbody');
+      sorted.forEach(([mob, info])=>{
+        const pullNums = info.pulls.map(p=>`#${p}`).join(', ');
+        const whLink = `<a href="https://www.wowhead.com/npc=${info.npc_id}" target="_blank" rel="noopener">map ↗</a>`;
+        ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td><td>${whLink}</td></tr>`));
+      });
+      box.append(otbl);
     }
   }
   if((b.fixate_mobs||[]).length){
