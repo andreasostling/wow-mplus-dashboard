@@ -678,7 +678,7 @@ _HTML = r"""<!doctype html>
 
   <div id="simc-section" style="display:none">
   <h2>SimC — DPS by dungeon</h2>
-  <div class="controls"><select id="fSimcDungeon"><option value="">All dungeons</option></select></div>
+  <div class="controls"><select id="fSimcDungeon"></select></div>
   <table id="simc-dps"><thead><tr>
     <th>Dungeon</th><th>Player</th><th>Spec</th><th>Our DPS (SimC)</th><th>Top +12 log</th><th>Ours vs top</th><th>Role</th>
   </tr></thead><tbody></tbody></table>
@@ -1194,7 +1194,7 @@ function renderSimcDps(){
         <td>${Math.round(p.dps).toLocaleString()}</td><td>${topCell}</td><td>${vs}</td>
         <td>${esc(roleLabel)}${roleTag}</td></tr>`));
     });
-    if(!fd){
+    if((ds.players||[]).length>1){
       tb.append(el(`<tr style="border-top:2px solid var(--line);font-weight:700">
         <td>${esc(d)}</td><td colspan="2">Group total</td>
         <td>${Math.round(ds.group_dps).toLocaleString()}</td><td colspan="2"></td><td></td></tr>`));
