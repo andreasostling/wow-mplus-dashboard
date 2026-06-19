@@ -1,0 +1,29 @@
+# Secrets — never commit
+.env
+.env.local
+*.env
+
+# Cached API responses / local data
+/cache/
+/data/
+*.sqlite
+*.db
+
+# Generated analysis outputs (regenerated each run from cache)
+/out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
