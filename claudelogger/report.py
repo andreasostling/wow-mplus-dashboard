@@ -813,6 +813,35 @@ function renderBriefing(){
       + (p.cat?` <span class="muted">(${esc(p.cat)})</span>`:'')).join(', ');
     return markSpells(names);
   };
+  // ---- route stop/kick targets — lead the panel ----
+  const rt=b.route;
+  if(!rt){ topBox.append(el('<div class="muted">No route data for this dungeon.</div>')); }
+  if(rt){
+    const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
+    topBox.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
+    if(!rt.ok){ topBox.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
+    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ topBox.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
+    else{
+      if((rt.kick_targets||[]).length){
+        topBox.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
+        const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const rb=rtbl.querySelector('tbody');
+        rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
+          <td class="contrib">${renderSpells(kt.spell_pairs, kt.spells)}</td>
+          <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        topBox.append(rtbl);
+      }
+      if((rt.stop_targets||[]).length){
+        topBox.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
+        const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const sb=stbl.querySelector('tbody');
+        rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
+          <td class="contrib">${renderSpells(st.spell_pairs, st.spells)}</td>
+          <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        topBox.append(stbl);
+      }
+    }
+  }
   if((b.dangerous_casts||[]).length){
     const allDanger=b.dangerous_casts; const shown=allDanger.slice(0,12);
     const more=allDanger.length-shown.length;
@@ -860,33 +889,7 @@ function renderBriefing(){
     topBox.append(gtbl);
     if(sorted.length>18) topBox.append(el(`<div class="muted" style="font-size:11px">+${sorted.length-18} more — see the full tracker.</div>`));
   }
-  const rt=b.route;
-  if(!rt){ topBox.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
-    const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
-    topBox.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
-    if(!rt.ok){ topBox.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
-    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ topBox.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
-    else{
-      if((rt.kick_targets||[]).length){
-        topBox.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
-        const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
-        const rb=rtbl.querySelector('tbody');
-        rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
-          <td class="contrib">${renderSpells(kt.spell_pairs, kt.spells)}</td>
-          <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        topBox.append(rtbl);
-      }
-      if((rt.stop_targets||[]).length){
-        topBox.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
-        const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
-        const sb=stbl.querySelector('tbody');
-        rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
-          <td class="contrib">${renderSpells(st.spell_pairs, st.spells)}</td>
-          <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        topBox.append(stbl);
-      }
-    }
     // off-route mobs
     const offRoute = rt.off_route_mobs || [];
     if(offRoute.length){
@@ -1086,33 +1089,42 @@ render();
     // B: DPS actual vs ceiling
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
-      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs SimC ceiling vs top +12</h3>'));
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS vs typical +12 <span class="muted" style="font-weight:normal">(typical = 100%)</span></h3>'));
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
-      let scaleMax = 1; names.forEach(n=>{ const s=sims[n]||{}; scaleMax=Math.max(scaleMax, dps[n].run_dps, s.dps||0, s.top12_typical||0); });
+      // Everything is measured against the typical +12 logger for that spec (= 100%).
+      // The track is scaled so the largest actual/sim still fits; sim may exceed 100%.
+      let scaleRel = 110;
+      names.forEach(n=>{ const s=sims[n]||{}, ref=s.top12_typical||0; if(ref>0){
+        scaleRel=Math.max(scaleRel, 100*dps[n].run_dps/ref, s.dps?100*s.dps/ref:0); }});
+      scaleRel = Math.ceil(scaleRel/10)*10;
+      const typLineW = 100*100/scaleRel;  // x of the 100% (typical) reference line
       let anyTop=false;
       names.sort((a,b)=>dps[b].run_dps-dps[a].run_dps).forEach(n=>{
-        const a = dps[n], s = sims[n]||{}, ceil = s.dps||0, top = s.top12_typical||0;
-        const kl = s.top12_key||12; if(top>0) anyTop=true;
+        const a = dps[n], s = sims[n]||{}, ceil = s.dps||0, ref = s.top12_typical||0;
+        const kl = s.top12_key||12;
         const roleTag = a.role==='tank'?' 🛡️':a.role==='healer'?' 💚':'';
-        const gap = (haveSim && ceil>0)? Math.round(100*a.run_dps/ceil) : null;
-        const actK = Math.round(a.run_dps/1000);
-        // actual / sim ceiling / gap%, plus the real top-+12 median as a third reference.
-        const topTxt = top>0? ` <span class="muted">· typical +${kl} ${Math.round(top/1000)}k</span>` : '';
-        // If the sim sits above the real +12 field, the ceiling itself is suspect (sim runs hot).
-        const rmTxt = s.sim_realism==='optimistic'
-          ? ` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — the ceiling is likely optimistic for this spec, so don't read the gap as pure execution">⚠ sim hot</span>` : '';
-        const gapTxt = gap!==null
-          ? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${actK}k / ${Math.round(ceil/1000)}k sim · ${gap}%</span>${topTxt}${rmTxt}`
-          : `${actK}k${topTxt}`;
-        const ceilW = haveSim&&ceil>0? Math.round(100*ceil/scaleMax):0; const actW = Math.round(100*a.run_dps/scaleMax);
-        const topW = top>0? Math.round(100*top/scaleMax):0;
-        const topMark = top>0? `<span title="typical (field-median) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>` : '';
-        box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
-          <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span>${topMark}</span>
-          <span class="muted" style="font-size:12px">${gapTxt}</span></div>`));
+        if(ref>0){
+          anyTop=true;
+          const actPct = 100*a.run_dps/ref, simPct = ceil>0? 100*ceil/ref : null;
+          const actW = Math.min(100, actPct/scaleRel*100), ceilW = simPct!=null? Math.min(100, simPct/scaleRel*100):0;
+          const rmTxt = s.sim_realism==='optimistic'
+            ? ` <span class="low" title="sim is at the ${s.sim_pctile}th percentile of the real +${kl} field — likely optimistic for this spec">⚠ sim hot</span>` : '';
+          const txt = `<span class="${actPct>=100?'ok-use':actPct>=85?'lever':'low'}">${Math.round(actPct)}% act</span>`
+            + (simPct!=null? ` · <span class="muted">${Math.round(simPct)}% sim</span>`:'')
+            + ` <span class="muted">of ${Math.round(ref/1000)}k</span>${rmTxt}`;
+          const typMark = `<span title="typical +${kl} ${esc(n)} = 100% (${Math.round(ref).toLocaleString()} DPS)" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${typLineW}% - 1px)"></span>`;
+          box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
+            <span class="track">${simPct!=null?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · sim '+Math.round(ceil).toLocaleString()):''}"></span>${typMark}</span>
+            <span class="muted" style="font-size:12px">${txt}</span></div>`));
+        } else {
+          // no +12 benchmark for this spec (e.g. healer) — just show the run DPS.
+          box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
+            <span class="track"><span class="act" style="width:30%"></span></span>
+            <span class="muted" style="font-size:12px">${Math.round(a.run_dps/1000)}k</span></div>`));
+        }
       });
-      if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+12 benchmark, and the gap%.</div>'));
-      else if(anyTop) box.append(el('<div class="contrib"><span style="color:#e0a040">▎</span> = typical +12 logger (field-median DPS, WCL) for that spec. The SimC ceiling already reflects <em>your</em> gear, so it&#39;s the gear-fair target; this marker is real-player context.</div>'));
+      if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed DPS against the typical +12 logger.</div>'));
+      else if(anyTop) box.append(el('<div class="contrib"><span style="color:#e0a040">▎</span> = typical +12 logger for that spec (= 100%). Bars: actual run DPS (filled) and SimC (dark), both as a % of typical; the sim can run past 100%. ⚠ = sim sits above the real +12 field (optimistic).</div>'));
     }
 
     // C: cooldown economy
