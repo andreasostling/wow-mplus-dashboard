@@ -116,6 +116,73 @@ COMP_CC_SEED: dict[int, tuple[str, str]] = {
 # Kinds that "stop" a mob (cast or movement) — i.e. CC beyond a pure interrupt.
 STUN_LIKE_KINDS = {"stun", "incap", "disorient", "silence", "knockback", "root", "fear"}
 
+
+def _nrm(s: str) -> str:
+    """Normalize a class/spec name for table lookup (lowercase, no spaces)."""
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+# What CC each class brings *baseline* (available to every spec of the class),
+# as COMP_CC_SEED spell ids. This is the comp's potential toolkit — used so the
+# "Your CC" briefing reflects which specs we play, independent of what got cast
+# in a given run. Spec-only additions live in SPEC_CC below. Keyed by normalized
+# class name (Actor.sub_type → _nrm).
+CLASS_CC: dict[str, set[int]] = {
+    "monk":        {116705, 119381, 115078, 116844},                  # Spear Hand Strike, Leg Sweep, Paralysis, Ring of Peace
+    "rogue":       {1766, 1833, 408, 6770, 1776, 2094},               # Kick, Cheap Shot, Kidney Shot, Sap, Gouge, Blind
+    "mage":        {2139, 118, 122},                                  # Counterspell, Polymorph, Frost Nova
+    "druid":       {106839, 5211, 99, 339, 33786, 132469, 102793, 102359},  # Skull Bash, Mighty Bash, Incap Roar, Roots, Cyclone, Typhoon, Ursol's Vortex, Mass Entangle
+    "warlock":     {19647, 5782, 5484, 6789, 30283, 710},             # Spell Lock, Fear, Howl of Terror, Mortal Coil, Shadowfury, Banish
+    "priest":      {8122, 605, 9484},                                 # Psychic Scream, Mind Control, Shackle Undead
+    "paladin":     {853, 96231, 20066, 105421},                       # Hammer of Justice, Rebuke, Repentance, Blinding Light
+    "hunter":      {147362, 19577, 117526, 187650, 186387, 213691},   # Counter Shot, Intimidation, Binding Shot, Freezing Trap, Bursting Shot, Scatter Shot
+    "warrior":     {6552, 107570, 46968, 5246},                       # Pummel, Storm Bolt, Shockwave, Intimidating Shout
+    "shaman":      {57994, 51514, 192058, 64695, 51490},              # Wind Shear, Hex, Capacitor Totem, Earthgrab Totem, Thunderstorm
+    "deathknight": {47528, 108194, 207167, 91800},                    # Mind Freeze, Asphyxiate, Blinding Sleet, Gnaw
+    "demonhunter": {183752, 179057, 211881, 217832, 207685, 202137},  # Disrupt, Chaos Nova, Fel Eruption, Imprison, Sigil of Misery, Sigil of Silence
+    "evoker":      {351338, 360806, 358385},                          # Quell, Sleep Walk, Landslide
+}
+
+# Spec-specific additions layered on top of the class baseline. Keyed by
+# (normalized class, normalized spec). Only entries that genuinely differ by spec.
+SPEC_CC: dict[tuple[str, str], set[int]] = {
+    ("mage", "frost"):       {82691, 157997},   # Ring of Frost, Ice Nova
+    ("mage", "fire"):        {31661},            # Dragon's Breath
+    ("druid", "balance"):    {78675},            # Solar Beam (AoE silence)
+    ("druid", "feral"):      {22570},            # Maim
+    ("warlock", "demonology"): {89766},          # Axe Toss (Felguard)
+    ("paladin", "protection"): {31935},          # Avenger's Shield (silence)
+    ("paladin", "holy"):     {20549},            # (placeholder; War Stomp is racial — left out)
+    ("priest", "shadow"):    {15487},            # Silence
+    ("priest", "holy"):      {88625},            # Holy Word: Chastise
+    ("shaman", "elemental"): {305485},           # Lightning Lasso
+    ("hunter", "survival"):  {187707},           # Muzzle
+    ("monk", "windwalker"):  {116706},           # Disable
+    ("deathknight", "frost"): {207167},          # Blinding Sleet
+}
+
+
+def comp_cc_kit(members) -> dict[str, list[str]]:
+    """Given the comp roster as an iterable of (class, spec), return the CC toolkit
+    those specs *can* bring, split into interrupts / true stuns / other CC. Labels
+    come from COMP_CC_SEED. This is capability (which specs we play), not usage."""
+    interrupts, stuns, other = set(), set(), set()
+    for cls, spec in members:
+        nc, ns = _nrm(cls), _nrm(spec)
+        ids = set(CLASS_CC.get(nc, set())) | set(SPEC_CC.get((nc, ns), set()))
+        for sid in ids:
+            seed = COMP_CC_SEED.get(sid)
+            if not seed:
+                continue
+            label, kind = seed
+            if kind == "interrupt":
+                interrupts.add(label)
+            elif kind == "stun":
+                stuns.add(label)
+            elif kind in STUN_LIKE_KINDS:
+                other.add(label)
+    return {"interrupts": sorted(interrupts), "stuns": sorted(stuns), "other_cc": sorted(other)}
+
 # Enemy CC applied to PLAYERS (the inverse of COMP_CC_SEED) — auras that stop a
 # player (here: the healer) from casting. WCL exposes no CC-category flag, so we
 # combine a curated seed with hard-CC name keywords. Soft CC (snare/slow/root)

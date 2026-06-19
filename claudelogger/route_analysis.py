@@ -53,14 +53,6 @@ class PullAnalysis:
 
 
 @dataclass
-class LustPlacement:
-    """A recommended bloodlust placement."""
-    pull_num: int
-    reason: str
-    value_score: float  # higher = better pull to lust on
-
-
-@dataclass
 class RouteIssue:
     """A detected issue or optimization opportunity in the route."""
     category: str       # lust_timing, cd_alignment, pull_imbalance, timer, travel, mana
@@ -70,11 +62,18 @@ class RouteIssue:
     detail: str
 
 
-def estimate_pull_duration(pull: dict, group_dps: float) -> float:
-    """Estimate how long a pull takes based on total enemy HP and group DPS."""
+def estimate_pull_duration(pull: dict, group_dps: float, knobs: SimcKnobs) -> float:
+    """Estimate how long a pull takes from real enemy HP and group DPS.
+
+    Route exports scale each enemy's HP to one player's damage share
+    (knobs.route_export_share), so multiply back up to full HP. group_dps is the
+    summed sim DPS of the party, and combat_uptime accounts for the fact that the
+    group isn't dealing damage 100% of the time (movement, mechanics, swaps)."""
     if group_dps <= 0:
         return 30.0  # fallback
-    return pull["total_health"] / group_dps
+    real_health = pull["total_health"] / max(knobs.route_export_share, 1e-6)
+    uptime = max(knobs.combat_uptime, 1e-6)
+    return real_health / group_dps / uptime
 
 
 def analyze_route(
@@ -85,8 +84,8 @@ def analyze_route(
 ) -> dict[str, Any]:
     """Full route analysis: lust placement, CD alignment, timer, failure modes.
 
-    Returns a dict with keys: pulls, lust_recommendations, issues, timer_analysis,
-    cd_windows, summary.
+    Returns a dict with keys: pulls, lusts_in_route, issues, timer, real_total_health,
+    estimated_clear_s, group_dps.
     """
     pulls = parse_route_pulls(route_text)
     if not pulls:
@@ -112,7 +111,7 @@ def analyze_route(
         compensated_delay = max(0.0, raw_delay - RANGED_PULL_SAVE_S)
         total_pull_save_s += raw_delay - compensated_delay
         cumulative_s += compensated_delay
-        est_dur = estimate_pull_duration(p, group_dps)
+        est_dur = estimate_pull_duration(p, group_dps, knobs)
         boss_names = [e["name"] for e in p["enemies"] if e["is_boss"]]
         # Summarize enemies
         unique_names = {}
@@ -137,14 +136,14 @@ def analyze_route(
         pull_analyses.append(pa)
         cumulative_s += est_dur
 
-    # Lust optimization
-    lust_recs, lust_issues = _optimize_lust(pull_analyses, knobs)
+    # Bloodlust: report the lusts that ARE in the route + flag missing/wasted ones.
+    lusts_in_route, lust_issues = _analyze_lust(pull_analyses, knobs)
 
     # CD alignment analysis
     cd_issues = _analyze_cd_alignment(pull_analyses, player_classes, knobs)
 
     # Timer analysis
-    timer_analysis, timer_issues = _analyze_timer(pull_analyses, dungeon, group_dps)
+    timer_analysis, timer_issues = _analyze_timer(pull_analyses, dungeon, group_dps, knobs)
 
     # Pull imbalance detection
     imbalance_issues = _detect_pull_imbalance(pull_analyses)
@@ -161,16 +160,19 @@ def analyze_route(
     all_issues = lust_issues + cd_issues + timer_issues + imbalance_issues + travel_issues + mana_issues + aoe_issues
     all_issues.sort(key=lambda i: {"critical": 0, "warning": 1, "info": 2}[i.severity])
 
+    share = max(knobs.route_export_share, 1e-6)
     return {
         "dungeon": dungeon,
         "pulls": [_pull_to_dict(pa) for pa in pull_analyses],
         "pull_count": len(pull_analyses),
         "total_health": sum(p["total_health"] for p in pulls),
+        "real_total_health": round(sum(p["total_health"] for p in pulls) / share),
+        "export_share_pct": round(share * 100, 1),
         "total_travel_s": sum(p["delay_s"] for p in pulls),
         "ranged_pull_save_s": round(total_pull_save_s, 1),
         "estimated_clear_s": round(cumulative_s, 1),
         "group_dps": round(group_dps, 1),
-        "lust_recommendations": [_lust_to_dict(l) for l in lust_recs],
+        "lusts_in_route": lusts_in_route,
         "timer": timer_analysis,
         "issues": [_issue_to_dict(i) for i in all_issues],
         "issue_counts": {
@@ -181,106 +183,72 @@ def analyze_route(
     }
 
 
-def _optimize_lust(
+def _analyze_lust(
     pulls: list[PullAnalysis],
     knobs: SimcKnobs,
-) -> tuple[list[LustPlacement], list[RouteIssue]]:
-    """Find optimal bloodlust placements given a 10-min exhaustion debuff.
+) -> tuple[list[dict], list[RouteIssue]]:
+    """Report the bloodlusts that ARE assigned in the route, and flag when the route
+    is leaving lusts on the table (fewer assigned than its duration allows) or wasting
+    one (two lusts inside the same exhaustion window).
 
-    Strategy: rank pulls by value (health * difficulty), then greedily place lusts
-    at least lust_cd_s apart.
+    We do NOT recommend "optimal" placements — that's a judgement call for the group.
+    The job here is just: are we missing a lust we could be using?
     """
-    issues = []
+    issues: list[RouteIssue] = []
 
-    # Score each pull for lust value
-    scored = []
-    for pa in pulls:
-        # Boss pulls are always high priority
-        score = pa.total_health
+    current = sorted((pa for pa in pulls if pa.bloodlust), key=lambda p: p.cumulative_time_s)
+    lusts_in_route = []
+    for pa in current:
+        ctx = []
         if pa.has_boss:
-            score *= 2.5
-        # Big trash packs benefit more from lust
+            ctx.append(f"boss ({', '.join(pa.boss_names)})")
         if pa.enemy_count >= 6:
-            score *= 1.3
-        scored.append((score, pa))
+            ctx.append(f"{pa.enemy_count}-mob pack")
+        lusts_in_route.append({
+            "pull_num": pa.pull_num,
+            "at_s": round(pa.cumulative_time_s - pa.delay_s, 1),
+            "reason": "; ".join(ctx) or f"{pa.enemy_count} mobs",
+        })
 
-    scored.sort(key=lambda x: -x[0])
+    total_time = pulls[-1].cumulative_time_s + pulls[-1].estimated_duration_s if pulls else 0
+    # A lust is up from the start; another becomes available every lust_cd_s.
+    max_lusts = 1 + int(total_time / knobs.lust_cd_s) if total_time > 0 else 1
 
-    # Greedily assign lusts
-    placements: list[LustPlacement] = []
-    lust_times: list[float] = []
+    if not current:
+        issues.append(RouteIssue(
+            category="lust_timing",
+            severity="warning",
+            pull_num=None,
+            message=f"No bloodlust assigned anywhere in this route (room for {max_lusts})",
+            detail="The route has no pull flagged with bloodlust. Assign it on your big "
+                   "pulls/bosses in keystone.guru so the sim and your run actually use it.",
+        ))
+    elif len(current) < max_lusts:
+        missing = max_lusts - len(current)
+        issues.append(RouteIssue(
+            category="lust_timing",
+            severity="warning",
+            pull_num=None,
+            message=f"{len(current)} lust(s) assigned but the route is long enough for {max_lusts} "
+                    f"— {missing} more available",
+            detail=f"Route is ~{total_time/60:.0f} min; with a {knobs.lust_cd_s//60}-min exhaustion "
+                   f"CD you can fit {max_lusts}. You're leaving {missing} unused.",
+        ))
 
-    for score, pa in scored:
-        # Check if this pull is at least lust_cd_s after all previous lusts
-        pull_start = pa.cumulative_time_s - pa.delay_s
-        can_lust = all(
-            abs(pull_start - t) >= knobs.lust_cd_s
-            for t in lust_times
-        )
-        if can_lust:
-            reason_parts = []
-            if pa.has_boss:
-                reason_parts.append(f"boss ({', '.join(pa.boss_names)})")
-            if pa.enemy_count >= 6:
-                reason_parts.append(f"large pack ({pa.enemy_count} mobs)")
-            reason_parts.append(f"total HP: {pa.total_health:,}")
-            placements.append(LustPlacement(
-                pull_num=pa.pull_num,
-                reason="; ".join(reason_parts),
-                value_score=score,
-            ))
-            lust_times.append(pull_start)
-
-    # Check existing lust assignments vs optimal
-    current_lust_pulls = [pa for pa in pulls if pa.bloodlust]
-    if current_lust_pulls:
-        current_set = {pa.pull_num for pa in current_lust_pulls}
-        optimal_set = {lp.pull_num for lp in placements}
-        if current_set != optimal_set:
+    # Two lusts inside one exhaustion window = the second does nothing.
+    for i in range(1, len(current)):
+        gap = current[i].cumulative_time_s - current[i-1].cumulative_time_s
+        if gap < knobs.lust_cd_s:
             issues.append(RouteIssue(
                 category="lust_timing",
-                severity="warning",
-                pull_num=None,
-                message=f"Current lust on pull(s) {sorted(current_set)} — optimal: {sorted(optimal_set)}",
-                detail="Re-assign bloodlust in keystone.guru route settings for better coverage.",
+                severity="critical",
+                pull_num=current[i].pull_num,
+                message=f"Lust on pull {current[i].pull_num} is only {gap:.0f}s after pull "
+                        f"{current[i-1].pull_num} (exhaustion lasts {knobs.lust_cd_s}s)",
+                detail="The group is still Exhausted — this second lust has no effect. Space them out.",
             ))
-    elif placements:
-        issues.append(RouteIssue(
-            category="lust_timing",
-            severity="warning",
-            pull_num=None,
-            message=f"No lusts assigned — recommend pull(s) {[lp.pull_num for lp in placements]}",
-            detail="Assign bloodlust to high-value pulls for faster clears.",
-        ))
 
-    # Check spacing — are lusts too close together?
-    if len(current_lust_pulls) >= 2:
-        sorted_lust = sorted(current_lust_pulls, key=lambda p: p.cumulative_time_s)
-        for i in range(1, len(sorted_lust)):
-            gap = sorted_lust[i].cumulative_time_s - sorted_lust[i-1].cumulative_time_s
-            if gap < knobs.lust_cd_s:
-                issues.append(RouteIssue(
-                    category="lust_timing",
-                    severity="critical",
-                    pull_num=sorted_lust[i].pull_num,
-                    message=f"Lust on pull {sorted_lust[i].pull_num} is only {gap:.0f}s after pull {sorted_lust[i-1].pull_num} (need {knobs.lust_cd_s}s)",
-                    detail="Exhaustion debuff will still be active. This lust will have no effect.",
-                ))
-
-    # How many lusts can we fit?
-    total_time = pulls[-1].cumulative_time_s + pulls[-1].estimated_duration_s if pulls else 0
-    max_lusts = 1 + int(total_time / knobs.lust_cd_s) if total_time > 0 else 1
-    if len(current_lust_pulls) < max_lusts and len(placements) > len(current_lust_pulls):
-        unused = max_lusts - len(current_lust_pulls)
-        issues.append(RouteIssue(
-            category="lust_timing",
-            severity="warning",
-            pull_num=None,
-            message=f"Could fit {max_lusts} lusts in this route but only {len(current_lust_pulls)} assigned ({unused} wasted)",
-            detail=f"Route duration ~{total_time:.0f}s allows {max_lusts} lusts with {knobs.lust_cd_s}s CD.",
-        ))
-
-    return placements, issues
+    return lusts_in_route, issues
 
 
 def _analyze_cd_alignment(
@@ -342,8 +310,13 @@ def _analyze_timer(
     pulls: list[PullAnalysis],
     dungeon: str,
     group_dps: float,
+    knobs: SimcKnobs,
 ) -> tuple[dict, list[RouteIssue]]:
-    """Analyze whether the route can be timed at the simmed DPS."""
+    """Analyze whether the route can be timed at the simmed DPS.
+
+    The clear estimate already folds in full enemy HP (un-scaled from the route's
+    export share), travel time, and a combat-uptime factor — see
+    estimate_pull_duration. Each M+ death costs knobs.death_penalty_s (15s)."""
     issues = []
     timer_s = DUNGEON_TIMERS.get(dungeon, 1800)
 
@@ -355,8 +328,8 @@ def _analyze_timer(
     margin_s = timer_s - total_estimated
     margin_pct = (margin_s / timer_s) * 100 if timer_s > 0 else 0
 
-    # Deaths penalty: 5 seconds per death
-    death_budget = int(margin_s / 5) if margin_s > 0 else 0
+    # M+ death penalty: each death adds death_penalty_s to the clock.
+    death_budget = int(margin_s / knobs.death_penalty_s) if margin_s > 0 else 0
 
     analysis = {
         "timer_s": timer_s,
@@ -364,6 +337,8 @@ def _analyze_timer(
         "margin_s": round(margin_s, 1),
         "margin_pct": round(margin_pct, 1),
         "death_budget": death_budget,
+        "death_penalty_s": knobs.death_penalty_s,
+        "combat_uptime": knobs.combat_uptime,
         "group_dps_needed": round(group_dps, 1),
     }
 
@@ -532,14 +507,6 @@ def _pull_to_dict(pa: PullAnalysis) -> dict:
         "estimated_duration_s": round(pa.estimated_duration_s, 1),
         "boss_names": pa.boss_names,
         "mob_summary": pa.mob_summary,
-    }
-
-
-def _lust_to_dict(lp: LustPlacement) -> dict:
-    return {
-        "pull_num": lp.pull_num,
-        "reason": lp.reason,
-        "value_score": round(lp.value_score, 1),
     }
 
 

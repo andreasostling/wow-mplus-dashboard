@@ -71,7 +71,7 @@ Outputs land in `out/`:
 - `dashboard.html` — self-contained, open it straight in a browser. Sortable, filter
   by dungeon / player / cause, with a **per-dungeon pre-run briefing** (dungeon picker).
 - `briefings/<Dungeon>.md` — one markdown cheat-sheet per dungeon: dangerous abilities +
-  what to do, kick priority, who dies there, and **route kick-targets**.
+  what to do, kick priority, who dies there, and **route stop-targets** (kicks + stuns/CC).
 
 ## Routes (keystone.guru)
 
@@ -81,8 +81,9 @@ Route short-codes live in `keystone.py:DEFAULT_ROUTES` and can be overridden by 
 `routes.json` at the repo root (`{"Dungeon Name": "shortCode"}`). For each route we
 fetch the public keystone.guru page (browser headers required — Cloudflare 403s a bare
 client), resolve its pulls' `enemy_id → npc_id`, and cross-reference MDT to list which
-route mobs have interruptible casts (spell names resolved from your logs, or WCL game
-data for never-seen dungeons). Cached under `cache/routes/`.
+route mobs have interruptible casts or stun/CC-category casts (from the mplus-interrupts
+curated database). Spell names resolved from your logs, or WCL game data for never-seen
+dungeons. Cached under `cache/routes/`.
 
 API responses are cached under `cache/` so re-analysis is offline and rate-limit-friendly.
 

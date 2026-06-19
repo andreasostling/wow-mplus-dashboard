@@ -6,9 +6,10 @@ pre-run briefings. **Read [README.md](README.md) for the user-facing feature lis
 
 ## Conventions (important)
 
-- **Python 3.11+.** External dependencies are allowed if warranted. HTTP is `urllib`,
-  JSON is `json`, HTML/CSS/JS is hand-written string templates. SimC integration
-  requires a local `simc` binary (set `CLAUDELOGGER_SIMC_BINARY` if not on PATH).
+- **Python 3.11+.** The interpreter is `python3` (there is no `python` on PATH); run
+  modules from the repo root or with `PYTHONPATH=.`. External dependencies are allowed
+  if warranted. HTTP is `urllib`, JSON is `json`, HTML/CSS/JS is hand-written string
+  templates.
 - **Secrets** live in `.env` (git-ignored). Never commit or echo the client secret.
 - **Everything is cached** under `cache/` (WCL GraphQL responses by query hash, MDT
   parses, keystone routes). Re-runs are offline and rate-limit-friendly. Delete a cache
@@ -21,16 +22,39 @@ pre-run briefings. **Read [README.md](README.md) for the user-facing feature lis
 ## Run
 
 ```sh
-python -m claudelogger report <REPORT_CODE> [--fight <ID>]   # one report/fight
-python -m claudelogger season [--limit 25]                   # discover + analyze recent
-python -m claudelogger briefing "<dungeon substring>"        # print a briefing
-python -m claudelogger simc [--dungeon "Xenas"] [--no-sim]   # SimC sims + route analysis
-python -m py_compile claudelogger/*.py                        # quick syntax check
+python3 -m claudelogger report <REPORT_CODE> [--fight <ID>]  # one report/fight
+python3 -m claudelogger season [--limit 25]                  # discover + analyze recent
+python3 -m claudelogger briefing "<dungeon substring>"       # print a briefing
+python3 -m claudelogger simc [--dungeon "Xenas"] [--no-sim]  # SimC sims + route analysis (set CLAUDELOGGER_SIMC_BINARY)
+python3 -m py_compile claudelogger/*.py                       # quick syntax check
 ```
 
 Outputs in `out/`: `analysis.json` (source of truth), `dashboard.html` (self-contained),
 `dashboard_artifact.html` (content-only variant for publishing), `briefings/<Dungeon>.md`,
 `simc_analysis.json` (sim results + route analysis), `simc/` (per-player per-dungeon profiles + HTML reports).
+
+## SimC tooling
+
+- **Binary**: built from source at `/tmp/simc-build/build/simc` — **SimulationCraft 1205-01,
+  WoW 12.0.7 (Midnight)**. `/tmp` is ephemeral; if it's gone, rebuild (≈5 min):
+  ```sh
+  sudo apt-get install -y cmake g++ libcurl4-openssl-dev git
+  git clone --depth 1 https://github.com/simulationcraft/simc.git /tmp/simc-build
+  cmake -S /tmp/simc-build -B /tmp/simc-build/build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF
+  cmake --build /tmp/simc-build/build -j"$(nproc)"
+  ```
+  It is NOT on PATH — every invocation must set `CLAUDELOGGER_SIMC_BINARY=/tmp/simc-build/build/simc`.
+  Reference Midnight S1 profiles ship under `/tmp/simc-build/profiles/MID1/`.
+- **Profile extraction needs a fight with gear**: `combatantInfo` is only present on some
+  fights. The cached example's **fight 3** (Nexus-Point Xenas) has it; the latest fight (4,
+  Windrunner) does NOT — `simc` auto-picks the latest and aborts with "No combatantInfo
+  events found". Always pass `--report LZBgMVX3yrf26CKP --fight 3` for the cached loop.
+- **Talents** aren't in WCL combatantInfo — each player needs `routes/overrides/<name>.simc`
+  with a `talents=` line (from the in-game `/simc` addon). `chibes.simc` is a full profile;
+  the others are talent-only supplements.
+- **Sample size**: `SimcKnobs.default_iterations=10000`, `target_error=0.1` (%) — converges
+  to publication-grade DPS. Override via `CLAUDELOGGER_SIMC_ITERATIONS` for quick tests.
+- Full proper run: `CLAUDELOGGER_SIMC_BINARY=/tmp/simc-build/build/simc python3 -m claudelogger simc --report LZBgMVX3yrf26CKP --fight 3`
 
 ## Architecture (pipeline order)
 

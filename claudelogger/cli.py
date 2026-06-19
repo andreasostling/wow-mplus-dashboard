@@ -141,7 +141,8 @@ def analyze_report(
         mana_series = fetch.fetch_healer_mana(client, code, fight, healer_ids[0]) if healer_ids else []
         findings, pull_tallies = classify_fight(rep, fe, kb, cfg.knobs, roles, mana_series)
         party = [
-            {"name": a.name, "role": roles.get(a.id, ("dps", ""))[0], "spec": roles.get(a.id, ("", ""))[1]}
+            {"name": a.name, "role": roles.get(a.id, ("dps", ""))[0],
+             "spec": roles.get(a.id, ("", ""))[1], "class": a.sub_type}
             for a in rep.party(fight)
         ]
         # Mobs observed applying a fixate aura (warn about these even if no death resulted).
@@ -284,6 +285,22 @@ def cmd_simc(args) -> int:
     # Overrides directory
     overrides_dir = cfg.routes_simc_dir.parent / "overrides"
 
+    # Prior per-player DPS (from the last simc run) seeds the damage-share scaling —
+    # each player sims against their DPS-proportional share of pull HP, not a flat %.
+    import json as _json
+    prior_dps: dict[str, float] = {}
+    prior_path = cfg.out_dir / "simc_analysis.json"
+    if prior_path.exists():
+        try:
+            bp = _json.loads(prior_path.read_text(encoding="utf-8"))["sim_results"]["by_player"]
+            prior_dps = {n: float(v.get("avg_dps", 0)) for n, v in bp.items()}
+        except (KeyError, ValueError, OSError):
+            pass
+    if prior_dps:
+        print(f"  damage-share: seeding from prior DPS ({len(prior_dps)} players)", file=sys.stderr)
+    else:
+        print("  damage-share: no prior DPS — using equal split this run", file=sys.stderr)
+
     # Run sims and route analysis per dungeon
     all_sim_results: list[simc.SimcResult] = []
     all_route_analyses: dict[str, dict] = {}
@@ -302,6 +319,7 @@ def cmd_simc(args) -> int:
                 dungeon_results = simc.run_dungeon_sims(
                     profiles, dungeon, cfg,
                     overrides_dir if overrides_dir.exists() else None,
+                    dps_by_player=prior_dps or None,
                 )
                 all_sim_results.extend(dungeon_results)
 
@@ -390,12 +408,11 @@ def _emit_simc(
             timer = ra.get("timer", {})
             margin = timer.get("margin_s", 0)
             deaths = timer.get("death_budget", 0)
-            lust = ra.get("lust_recommendations", [])
-            lust_pulls = [l["pull_num"] for l in lust[:3]]
+            lust = ra.get("lusts_in_route", [])
+            lust_pulls = [l["pull_num"] for l in lust]
             print(f"\n  {dungeon}:")
             print(f"    Timer margin: {margin:+.0f}s ({deaths} deaths budget)")
-            if lust_pulls:
-                print(f"    Optimal lust: pulls {lust_pulls}")
+            print(f"    Bloodlust in route: {'pulls ' + str(lust_pulls) if lust_pulls else 'NONE assigned'}")
             if crit:
                 print(f"    {crit} CRITICAL issue(s)")
             if warn:

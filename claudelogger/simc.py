@@ -300,6 +300,28 @@ def parse_route_pulls(route_text: str) -> list[dict]:
     return pulls
 
 
+def scale_route_health(route_text: str, factor: float) -> str:
+    """Scale every enemy's HP in the pull lines by `factor`.
+
+    keystone.guru exports each enemy at a fixed % of full HP (one player's damage
+    share). To sim a player against *their* realistic share, we rescale from the
+    export share to share_i (their fraction of group DPS). Only the quoted
+    `"name":health` tokens inside enemies= lists are touched — enemy_health=,
+    max_time=, keystone_level=, etc. are left alone."""
+    if abs(factor - 1.0) < 1e-6:
+        return route_text
+    lines = []
+    for line in route_text.splitlines():
+        if ",enemies=" in line:
+            line = re.sub(
+                r'("[^"]+"):(\d+)',
+                lambda m: f'{m.group(1)}:{max(1, int(int(m.group(2)) * factor))}',
+                line,
+            )
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def get_route_max_time(route_text: str) -> int | None:
     """Extract the max_time (dungeon timer in seconds) from route text."""
     m = re.search(r"^max_time=(\d+)", route_text, re.MULTILINE)
@@ -356,6 +378,21 @@ def build_combined_profile(
         if override_lines:
             sections.append(f"\n# Overrides from {overrides_path.name}")
             sections.append("\n".join(override_lines))
+
+    # Consumables (flask/food/augment rune/weapon oil). Skip any the override file
+    # already sets — a re-exported /simc dump carries the player's real consumables.
+    declared = {ln.split("=", 1)[0].strip() for ln in override_lines}
+    cons = []
+    if knobs.flask and "flask" not in declared:
+        cons.append(f"flask={knobs.flask}")
+    if knobs.food and "food" not in declared:
+        cons.append(f"food={knobs.food}")
+    if knobs.augmentation and "augmentation" not in declared:
+        cons.append(f"augmentation={knobs.augmentation}")
+    if knobs.weapon_oil and "temporary_enchant" not in declared:
+        cons.append(f"temporary_enchant=main_hand:{knobs.weapon_oil}/off_hand:{knobs.weapon_oil}")
+    if cons:
+        sections.append("# Consumables (Midnight S1 defaults — config.SimcKnobs)\n" + "\n".join(cons))
 
     # Route data
     sections.append("\n# Route configuration")
@@ -507,8 +544,14 @@ def run_dungeon_sims(
     dungeon: str,
     cfg: Config,
     overrides_dir: Path | None = None,
+    dps_by_player: dict[str, float] | None = None,
 ) -> list[SimcResult]:
     """Run simc for each player profile against a dungeon route.
+
+    If dps_by_player (player name → DPS from a prior sim) is given, each player's
+    route HP is rescaled so they fight their realistic share of the pull
+    (share_i = dps_i / group_dps, padded by knobs.share_pad), instead of the flat
+    export share. The tank ends up with a smaller share than the DPS.
 
     Returns a list of SimcResult objects (one per player that simmed successfully).
     """
@@ -519,6 +562,21 @@ def run_dungeon_sims(
 
     # Set up group buffs based on the party composition
     route_text = _inject_group_buffs(route_text, profiles)
+
+    # Per-player damage share (proportional to DPS, padded). Falls back to an equal
+    # split across the simmed players when no prior DPS is available.
+    total_dps = sum((dps_by_player or {}).get(p.name, 0.0) for p in profiles)
+    export_share = max(cfg.simc.route_export_share, 1e-6)
+
+    def health_factor(name: str) -> float:
+        if dps_by_player and total_dps > 0:
+            pdps = dps_by_player.get(name, 0.0)
+            if pdps > 0:
+                share = pdps / total_dps
+                return share * cfg.simc.share_pad / export_share
+        # No prior DPS: equal split among the players we're simming.
+        n = max(1, len(profiles))
+        return (1.0 / n) * cfg.simc.share_pad / export_share
 
     results = []
     for profile in profiles:
@@ -542,9 +600,11 @@ def run_dungeon_sims(
                   file=sys.stderr)
             continue
 
-        use_route = route_text
+        factor = health_factor(profile.name)
+        use_route = scale_route_health(route_text, factor)
 
-        print(f"  simc: simming {profile.name} ({profile.spec} {profile.simc_class}) in {dungeon}…",
+        print(f"  simc: simming {profile.name} ({profile.spec} {profile.simc_class}) in {dungeon} "
+              f"(HP share {export_share*factor*100:.0f}%)…",
               file=sys.stderr)
 
         combined = build_combined_profile(profile, use_route, cfg.simc, overrides_path)

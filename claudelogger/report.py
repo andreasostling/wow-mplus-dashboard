@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .classify import AVOIDABLE_BUCKETS, INTERRUPT, STUN, DeathFinding
-from .knowledge import COMP_CC_SEED
+from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
 def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pulls=None, fixate_mobs=None) -> dict[str, Any]:
@@ -21,7 +21,8 @@ def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pul
         "key_level": fight.keystone_level,
         "completed": fight.kill,
         "date_ms": fight.start_time,
-        "party": [{"name": p["name"], "role": p["role"], "spec": p["spec"]} for p in party],
+        "party": [{"name": p["name"], "role": p["role"], "spec": p["spec"],
+                   "class": p.get("class", "")} for p in party],
         "comp_cc": comp_cc,
         "pulls": pulls or [],
         "fixate_mobs": fixate_mobs or [],
@@ -159,6 +160,12 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
     for r in runs:
         by_dungeon[r["dungeon"]].append(r)
 
+    # The comp's CC toolkit is a property of which specs we play, not of any single
+    # run — derive it once from the union of party members across all runs so every
+    # dungeon (including route-only ones we haven't logged) shows the full kit.
+    roster = {(p.get("class", ""), p.get("spec", "")) for r in runs for p in r.get("party", [])}
+    comp_kit = comp_cc_kit(roster)
+
     out: dict[str, Any] = {}
     for dungeon, drs in by_dungeon.items():
         wipes = sum(len({d["wipe_id"] for d in r["deaths"] if d.get("wipe_id")}) for r in drs)
@@ -208,7 +215,11 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
                 for sp, n in (p.get("leaked_by_spell") or {}).items():
                     leaked[sp] += n
 
-        comp_int, comp_stun, comp_other = set(), set(), set()
+        # Start from the comp's spec-based toolkit (what we *can* bring), then fold in
+        # anything actually cast in these runs (covers off-kit/seed gaps).
+        comp_int = set(comp_kit["interrupts"])
+        comp_stun = set(comp_kit["stuns"])
+        comp_other = set(comp_kit["other_cc"])
         for r in drs:
             comp_int |= set(r["comp_cc"].get("interrupts", []))
             comp_stun |= set(r["comp_cc"].get("stuns", []))
@@ -240,6 +251,13 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
 
     if route_info:
         _merge_route_info(out, route_info, by_dungeon)
+    # Route-only dungeons (no logged runs) get empty comp lists from _empty_briefing —
+    # backfill them with the comp's spec-based kit so "Your CC" is never blank.
+    for b in out.values():
+        if not (b["comp_interrupts"] or b["comp_stuns"] or b["comp_other_cc"]):
+            b["comp_interrupts"] = comp_kit["interrupts"]
+            b["comp_stuns"] = comp_kit["stuns"]
+            b["comp_other_cc"] = comp_kit["other_cc"]
     return out
 
 
@@ -547,6 +565,29 @@ const bucketLabel = {
 const el = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild;};
 const esc = (s)=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
+// ---- Dungeon dropdown sync ----
+// Every per-dungeon dropdown registers here so changing one changes them all.
+// Dungeon display names differ slightly between sections (e.g. "Algeth'ar Academy"
+// vs "Algethar Academy"), so match options by a normalized key, not raw equality.
+const dnorm = (s)=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const DUNGEON_SYNC = [];  // {sel, render}
+let _syncing = false;
+function registerDungeonSelect(sel, render){ DUNGEON_SYNC.push({sel, render}); }
+function syncDungeon(value, origin){
+  if(_syncing) return;
+  _syncing = true;
+  const key = dnorm(value);
+  for(const {sel, render} of DUNGEON_SYNC){
+    if(sel === origin) continue;
+    // Find an option whose normalized value matches; fall back to "" (All) if present.
+    let match = [...sel.options].find(o=>dnorm(o.value)===key && o.value!=='');
+    if(match) sel.value = match.value;
+    else if([...sel.options].some(o=>o.value==='')) sel.value = '';
+    if(render) render();
+  }
+  _syncing = false;
+}
+
 document.getElementById('sub').textContent =
   `${S.runs_analyzed} run(s) · generated ${S.generated} · ${S.wipes||0} wipe(s), `
   + `${S.wipe_cascade_excluded||0} cascade death(s) excluded from cause stats (${S.deaths_incl_cascade||S.total_deaths} total)`;
@@ -661,7 +702,8 @@ function renderBriefing(){
       <span class="track"><span class="fill" style="width:${100*n/pdmx}%"></span></span><span>${n}</span></div>`)));
   }
 }
-bsel.onchange = renderBriefing;
+bsel.onchange = ()=>{ renderBriefing(); syncDungeon(bsel.value, bsel); };
+registerDungeonSelect(bsel, renderBriefing);
 if(Object.keys(BRIEF).length) renderBriefing();
 
 // bucket bars
@@ -734,6 +776,9 @@ function render(){
 document.querySelectorAll('#deaths th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; sortDir=(sortK===k)?-sortDir:1; sortK=k; render();});
 ['fDungeon','fPlayer','fBucket','fAvoid','fHideCascade'].forEach(id=>document.getElementById(id).onchange=render);
+const fDungeonSel = document.getElementById('fDungeon');
+fDungeonSel.onchange = ()=>{ render(); syncDungeon(fDungeonSel.value, fDungeonSel); };
+registerDungeonSelect(fDungeonSel, render);
 render();
 
 // ---- SimC + Route Analysis section ----
@@ -767,7 +812,8 @@ function renderSimcDps(){
     }
   });
 }
-dsel.onchange = renderSimcDps;
+dsel.onchange = ()=>{ renderSimcDps(); syncDungeon(dsel.value, dsel); };
+registerDungeonSelect(dsel, renderSimcDps);
 if(Object.keys(byDungeon).length) renderSimcDps();
 
 // Route analysis
@@ -782,22 +828,29 @@ function renderRoute(){
 
   // Timer summary
   const t=ra.timer||{};
-  const mClass = t.margin_s<0?'av-yes':t.margin_s<60?'lever':'av-no';
+  const mClass = t.margin_s<0?'av-yes':t.margin_s<120?'lever':'av-no';
+  const fmtMin = (s)=>`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
   box.append(el(`<div class="verdict">
-    <b>Timer:</b> <span class="${mClass}">${t.margin_s>0?'+':''}${t.margin_s}s margin</span>
-    (est. clear ${Math.round(t.estimated_clear_s)}s / ${t.timer_s}s timer)
-    · <b>${t.death_budget}</b> deaths allowed
-    · group DPS: ${Math.round(t.group_dps_needed||0).toLocaleString()}</div>`));
+    <b>Timer:</b> <span class="${mClass}">${t.margin_s>0?'+':''}${Math.round(t.margin_s)}s margin</span>
+    (est. clear ${fmtMin(t.estimated_clear_s)} / ${fmtMin(t.timer_s)} timer)
+    · <b>${t.death_budget}</b> deaths allowed (${t.death_penalty_s||15}s each)
+    · group DPS: ${Math.round(t.group_dps_needed||0).toLocaleString()}
+    <div class="contrib" style="margin-top:4px">Clear estimate uses full enemy HP
+      (un-scaled from the ${ra.export_share_pct||25}% export share) at
+      ${Math.round((t.combat_uptime||0.85)*100)}% combat uptime, plus ${t.estimated_clear_s? Math.round(ra.total_travel_s||0):0}s travel.</div>
+  </div>`));
 
-  // Lust recommendations
-  const lusts = ra.lust_recommendations||[];
+  // Bloodlust currently in the route (we don't recommend "optimal" — just flag gaps).
+  const lusts = ra.lusts_in_route||[];
+  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🔥 Bloodlust in this route</h3>'));
   if(lusts.length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🔥 Optimal bloodlust placement</h3>'));
-    const ltbl=el('<table><thead><tr><th>Pull</th><th>Reason</th></tr></thead><tbody></tbody></table>');
+    const ltbl=el('<table><thead><tr><th>Pull</th><th>~When</th><th>What</th></tr></thead><tbody></tbody></table>');
     const lb=ltbl.querySelector('tbody');
     lusts.forEach(l=>lb.append(el(`<tr><td><span class="lust-pill">Pull ${l.pull_num}</span></td>
-      <td class="contrib">${esc(l.reason)}</td></tr>`)));
+      <td class="muted">${fmtMin(l.at_s||0)}</td><td class="contrib">${esc(l.reason)}</td></tr>`)));
     box.append(ltbl);
+  } else {
+    box.append(el('<div class="muted">No bloodlust assigned in this route — see issues below.</div>'));
   }
 
   // Pull timeline bar chart
@@ -828,7 +881,8 @@ function renderRoute(){
     });
   }
 }
-rsel.onchange = renderRoute;
+rsel.onchange = ()=>{ renderRoute(); syncDungeon(rsel.value, rsel); };
+registerDungeonSelect(rsel, renderRoute);
 if(Object.keys(routeAnalyses).length) renderRoute();
 })();
 </script></body></html>

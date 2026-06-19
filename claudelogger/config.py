@@ -114,9 +114,33 @@ class SimcKnobs:
     key_level: int = 12                      # default key level for sims
     lust_cd_s: int = 600                     # bloodlust exhaustion debuff (10 min)
     lust_duration_s: int = 40                # bloodlust buff duration
-    default_iterations: int = 5000           # simc iteration count
-    target_error: float = 0.2               # simc target_error (%)
+    default_iterations: int = 10000          # iteration cap (simc stops earlier once target_error is met)
+    target_error: float = 0.1               # converge until DPS error < 0.1% — publication-grade sample
     threads: int = 0                         # 0 = let simc auto-detect
+
+    # Damage-share / timer model:
+    # keystone.guru exports each enemy's HP at a fixed percentage (one player's
+    # damage share). We exported at 25%, so real total HP = sum(route HP) / this.
+    route_export_share: float = 0.25
+    # Per-player share = that player's true fraction of group DPS (shares sum to
+    # ~100%). Leave at 1.0; padding it doesn't reach the timer (DPS is a rate, so
+    # more HP just lengthens the sim at ~same DPS) and makes shares exceed 100%.
+    # The single realism lever is combat_uptime below.
+    share_pad: float = 1.0
+    # THE realism lever. Fraction of the run actually spent dealing damage — the
+    # rest is movement, mechanics, target-swaps, boss downtime, and run-to-run
+    # variance. Turns ideal HP/DPS into a realistic clear estimate. Lower = more
+    # conservative timer (0.80 ≈ "+20% margin over a perfect-uptime clear").
+    combat_uptime: float = 0.80
+    # M+ death penalty: each death costs this many seconds against the timer.
+    death_penalty_s: int = 15
+    # Midnight Season 1 consumables (simc tokens). Injected into every sim profile
+    # unless the player's override file already specifies them. Verify the tokens
+    # match your simc build's data (a wrong name is ignored with a warning, not fatal).
+    flask: str = "flask_of_the_shattered_sun"
+    food: str = "silvermoon_parade"
+    augmentation: str = "void_touched_augment_rune"
+    weapon_oil: str = "thalassian_phoenix_oil"   # applied as temporary_enchant on weapons
 
 
 @dataclass
