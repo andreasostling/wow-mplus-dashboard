@@ -49,9 +49,11 @@ def analyze_run(
     boss_npc_game_ids: set[int] | None = None,
     death_penalty_s: int = 15,
     downtime_gap_s: float = 8.0,
+    pull_dps: dict[int, dict] | None = None,
 ) -> dict[str, Any]:
     """Build the timing + actual-DPS section for one logged run."""
     boss_ids = boss_npc_game_ids or set()
+    pull_dps = pull_dps or {}
     run_ms = max(0, fight.end_time - fight.start_time)
     run_s = run_ms / 1000.0
 
@@ -97,6 +99,7 @@ def analyze_run(
                 for g in p.get("npc_game_ids", []) if g in boss_ids
             )
         dur_s = round((p["end_ms"] - p["start_ms"]) / 1000.0, 1)
+        pdps = pull_dps.get(p["pull"], {})
         pull_rows.append({
             "pull": p["pull"],
             "start_s": round((p["start_ms"] - fight.start_time) / 1000.0, 1),
@@ -105,6 +108,8 @@ def analyze_run(
             "downtime_after_s": max(0.0, downtime_after),
             "is_boss": is_boss,
             "distinct_mobs": p.get("distinct_mobs", 0),
+            "group_dps": pdps.get("group", 0),
+            "dps_by_player": pdps.get("by_player", {}),
         })
         if is_boss:
             boss_segments.append((boss_name or "Boss", dur_s))
