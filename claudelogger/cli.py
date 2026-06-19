@@ -113,6 +113,7 @@ def analyze_report(
     mdt_facts: dict | None = None,
     mdt_npc_sets: tuple[set[int], set[int]] | None = None,
     spell_cats: dict[int, str] | None = None,
+    log_positions: dict | None = None,
 ) -> list[dict]:
     rep = fetch.get_report(client, code)
     runs: list[dict] = []
@@ -140,7 +141,10 @@ def analyze_report(
         # Healer mana (for the "heal more vs OOM" call) — fetched per healer.
         healer_ids = [aid for aid, (role, _s) in roles.items() if role == "healer"]
         mana_series = fetch.fetch_healer_mana(client, code, fight, healer_ids[0]) if healer_ids else []
-        findings, pull_tallies = classify_fight(rep, fe, kb, cfg.knobs, roles, mana_series)
+        # Real max HP per player from the local combat log (sharpens death analysis).
+        _log_entry = combatlog.for_dungeon(log_positions or {}, fight.name)
+        real_max_hp = _log_entry["player_max_hp"] if _log_entry else {}
+        findings, pull_tallies = classify_fight(rep, fe, kb, cfg.knobs, roles, mana_series, real_max_hp)
         party = [
             {"name": a.name, "role": roles.get(a.id, ("dps", ""))[0],
              "spec": roles.get(a.id, ("", ""))[1], "class": a.sub_type}
@@ -148,9 +152,22 @@ def analyze_report(
         ]
         # Post-run performance: time-loss + actual DPS, and cooldown/defensive economy.
         dmg_done = fetch.fetch_damage_done(client, code, fight)
+        # Per-pull DPS via windowed damage tables (skip tiny pulls to limit API calls).
+        party_ids = set(fight.friendly_players)
+        pull_dps: dict[int, dict] = {}
+        for pt in pull_tallies:
+            if pt["duration_s"] < cfg.knobs.pull_min_ms / 1000:
+                continue
+            dd = fetch.fetch_damage_done(client, code, fight, pt["start_ms"], pt["end_ms"])
+            dur = max(pt["duration_s"], 0.1)
+            by_player = {rep.actors[a].name: round(v["total"] / dur)
+                         for a, v in dd.items()
+                         if a in party_ids and a in rep.actors and rep.actors[a].is_player}
+            pull_dps[pt["pull"]] = {"group": round(sum(by_player.values())), "by_player": by_player}
         timing = run_analysis.analyze_run(
             fight, pull_tallies, findings, dmg_done, rep, roles,
             kb.boss_npc_game_ids or set(), cfg.simc.death_penalty_s, cfg.knobs.downtime_gap_s,
+            pull_dps,
         )
         tank_id = next((aid for aid in fight.friendly_players
                         if roles.get(aid, ("", ""))[1] == "Brewmaster"), None)
@@ -170,7 +187,8 @@ def analyze_report(
             and knowledge.is_fixate(e.get("abilityGameID", 0), rep.ability_name(e.get("abilityGameID", 0)))
         })
         runs.append(report.build_run(code, fight, party, _comp_cc_labels(kb), findings,
-                                     pull_tallies, fixate_mobs, timing, cdecon))
+                                     pull_tallies, fixate_mobs, timing, cdecon,
+                                     report_start_ms=rep.start_time))
     return runs
 
 
@@ -180,8 +198,9 @@ def cmd_report(args) -> int:
     mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)
     npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
     spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
-    runs = analyze_report(client, cfg, args.code, args.fight, mdt_facts, npc_sets, spell_cats)
-    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats))
+    log_positions = combatlog.load_positions(cfg.cache_dir)
+    runs = analyze_report(client, cfg, args.code, args.fight, mdt_facts, npc_sets, spell_cats, log_positions)
+    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats), log_positions)
     return 0
 
 
@@ -191,19 +210,22 @@ def cmd_season(args) -> int:
     mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)
     npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
     spell_cats = knowledge.load_spell_categories(cfg.cache_dir)
+    log_positions = combatlog.load_positions(cfg.cache_dir)
     reports = fetch.discover_reports(client, cfg.character_id, args.limit)
     print(f"Discovered {len(reports)} recent report(s) for character {cfg.character_id}.", file=sys.stderr)
     runs: list[dict] = []
     for r in reports:
-        runs.extend(analyze_report(client, cfg, r["code"], None, mdt_facts, npc_sets, spell_cats))
-    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats))
+        runs.extend(analyze_report(client, cfg, r["code"], None, mdt_facts, npc_sets, spell_cats, log_positions))
+    _emit(cfg, runs, build_route_info(client, cfg, runs, spell_cats), log_positions)
     return 0
 
 
-def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None) -> None:
+def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None,
+          log_positions: dict | None = None) -> None:
     season = report.build_season(runs)
     # Exact mob positions from the local advanced combat log (off-route localization).
-    log_positions = combatlog.load_positions(cfg.cache_dir)
+    if log_positions is None:
+        log_positions = combatlog.load_positions(cfg.cache_dir)
     if log_positions:
         print(f"combat log: positions for {len(log_positions)} dungeon run(s) "
               f"({combatlog.find_archive()})", file=sys.stderr)

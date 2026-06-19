@@ -16,13 +16,15 @@ from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
 def build_run(rep_code, fight, party, comp_cc, findings: list[DeathFinding], pulls=None,
-              fixate_mobs=None, timing=None, cd_economy=None) -> dict[str, Any]:
+              fixate_mobs=None, timing=None, cd_economy=None, report_start_ms=0) -> dict[str, Any]:
     return {
         "report": rep_code,
         "dungeon": fight.name,
         "key_level": fight.keystone_level,
         "completed": fight.kill,
-        "date_ms": fight.start_time,
+        # WCL fight.start_time is relative to the report start; add the report's absolute
+        # epoch start so date_ms is a real timestamp (used for progression ordering).
+        "date_ms": (report_start_ms or 0) + fight.start_time,
         "party": [{"name": p["name"], "role": p["role"], "spec": p["spec"],
                    "class": p.get("class", "")} for p in party],
         "comp_cc": comp_cc,
@@ -340,7 +342,8 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
         # log-only ones. Each off-route mob gets world coords + the nearest ON-route mob
         # (same coordinate space → no map transform needed). Matched by dungeon name.
         if log_positions and route_npc_set:
-            posmap = next((v for k, v in log_positions.items() if norm(k) == norm(match)), None)
+            _entry = combatlog.for_dungeon(log_positions, match)
+            posmap = _entry["mobs"] if _entry else None
             if posmap:
                 located = combatlog.locate_off_route(posmap, route_npc_set)
                 seen_npc = set()
@@ -564,6 +567,7 @@ _HTML = r"""<!doctype html>
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="deaths">Deaths &amp; survival</button>
     <button class="tab" data-tab="dps">DPS &amp; SimC</button>
+    <button class="tab" data-tab="progression">Progression</button>
   </div>
 
   <div class="tabpanel active" id="tab-deaths">
@@ -614,6 +618,17 @@ _HTML = r"""<!doctype html>
   <div class="controls"><select id="fRouteDungeon"></select></div>
   <div id="route-analysis"></div>
   </div>
+  </div>
+
+  <div class="tabpanel" id="tab-progression">
+  <h2>Progression — runs over time</h2>
+  <div id="prog-cards" class="cards"></div>
+  <table id="progression"><thead><tr>
+    <th>Date</th><th>Dungeon</th><th>Key</th><th>Result</th><th>Deaths</th>
+    <th>Downtime</th><th>Group DPS</th>
+  </tr></thead><tbody></tbody></table>
+  <div class="contrib" style="margin-top:8px">One row per logged run. Run <code>season</code> to
+    accumulate more runs over time and watch deaths/timer/DPS trend.</div>
   </div>
 
   <footer id="foot"></footer>
@@ -916,15 +931,18 @@ render();
     }
     const pulls = t.pulls||[];
     if(pulls.length){
-      box.append(el('<h3 class="muted" style="margin:12px 0 6px">📊 Pull timeline (combat · idle after)</h3>'));
+      box.append(el('<h3 class="muted" style="margin:12px 0 6px">📊 Pull timeline (combat · group DPS · idle after)</h3>'));
       const maxDur = Math.max(1,...pulls.map(p=>p.duration_s));
       pulls.forEach(p=>{
         const cls = p.is_boss?'fill-boss':'fill-trash';
         const dt = p.downtime_after_s>=8?` <span class="muted">+${Math.round(p.downtime_after_s)}s idle</span>`:'';
         const dth = p.deaths?` <span class="av-yes">☠${p.deaths}</span>`:'';
+        const byP = p.dps_by_player||{};
+        const dpsTitle = Object.entries(byP).sort((a,b)=>b[1]-a[1]).map(([n,v])=>`${esc(n)}: ${Math.round(v/1000)}k`).join('\n');
+        const dps = p.group_dps?` <span title="${dpsTitle}">· ${Math.round(p.group_dps/1000)}k dps</span>`:'';
         box.append(el(`<div class="pull-bar"><span class="muted">#${p.pull}</span>
           <span class="track"><span class="fill ${cls}" style="width:${Math.round(100*p.duration_s/maxDur)}%" title="${p.distinct_mobs} mobs"></span></span>
-          <span class="muted" style="font-size:11px">${Math.round(p.duration_s)}s${dth}${dt}</span></div>`));
+          <span class="muted" style="font-size:11px">${Math.round(p.duration_s)}s${dps}${dth}${dt}</span></div>`));
       });
     }
     if((t.boss_times||[]).length)
@@ -941,7 +959,11 @@ render();
         const a = dps[n], ceil = sims[n]||0;
         const roleTag = a.role==='tank'?' 🛡️':a.role==='healer'?' 💚':'';
         const gap = (haveSim && ceil>0)? Math.round(100*a.run_dps/ceil) : null;
-        const gapTxt = gap!==null? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${gap}% of ceil</span>` : `${Math.round(a.run_dps).toLocaleString()}`;
+        const actK = Math.round(a.run_dps/1000);
+        // Show actual AND the SimC ceiling DPS number, plus the gap%.
+        const gapTxt = gap!==null
+          ? `<span class="${gap<70?'low':gap<85?'lever':'ok-use'}">${actK}k / ${Math.round(ceil/1000)}k sim · ${gap}%</span>`
+          : `${actK}k`;
         const ceilW = haveSim&&ceil>0? Math.round(100*ceil/scaleMax):0; const actW = Math.round(100*a.run_dps/scaleMax);
         box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
           <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span></span>
@@ -1090,6 +1112,34 @@ function renderRoute(){
 rsel.onchange = ()=>{ renderRoute(); syncDungeon(rsel.value, rsel); };
 registerDungeonSelect(rsel, renderRoute);
 if(Object.keys(routeAnalyses).length) renderRoute();
+})();
+
+// ---- Progression: runs over time ----
+(function(){
+  const fmtDate = (ms)=> ms ? new Date(ms).toISOString().slice(0,10) : '—';
+  const fmtMin = (s)=>{s=Math.max(0,Math.round(Math.abs(s||0)));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;};
+  const runs = RUNS.slice().sort((a,b)=>(a.date_ms||0)-(b.date_ms||0));
+  const tb = document.querySelector('#progression tbody');
+  let timed=0, withTimer=0, totalDeaths=0;
+  runs.forEach(r=>{
+    const t = r.timing||{};
+    const groupDps = Object.values(t.dps_actual||{}).reduce((s,v)=>s+(v.run_dps||0),0);
+    let result = '<span class="muted">—</span>';
+    if(t.timer_s){
+      withTimer++;
+      if(t.on_time){ timed++; result=`<span class="av-no">timed +${fmtMin(t.margin_s)}</span>`; }
+      else result=`<span class="av-yes">over ${fmtMin(t.margin_s)}</span>`;
+    }
+    totalDeaths += t.deaths||0;
+    tb.append(el(`<tr><td class="muted">${fmtDate(r.date_ms)}</td><td>${esc(r.dungeon)}</td>
+      <td>+${r.key_level}</td><td>${result}</td><td>${t.deaths||0}</td>
+      <td>${t.downtime_pct!=null?t.downtime_pct+'%':'—'}</td>
+      <td>${groupDps?Math.round(groupDps/1000)+'k':'—'}</td></tr>`));
+  });
+  const cards = [['Runs', runs.length], ['Timed', withTimer?`${timed}/${withTimer}`:'—'],
+    ['Total deaths', totalDeaths], ['Avg deaths/run', runs.length?(totalDeaths/runs.length).toFixed(1):'—']];
+  const cw = document.getElementById('prog-cards');
+  cards.forEach(([l,n])=>cw.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
 })();
 </script></body></html>
 """

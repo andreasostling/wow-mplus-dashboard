@@ -165,21 +165,36 @@ def _split_line(line: str) -> tuple[str, list[str]] | None:
     return ts, fields
 
 
-def _record(f: list[str], by_guid: dict[str, dict[str, Any]], ts: str) -> None:
-    """Record/accumulate the subject creature's position for one parsed event line."""
+def _record(f: list[str], by_guid: dict[str, dict[str, Any]],
+            player_hp: dict[str, int], ts: str) -> None:
+    """Record the subject creature's position, and capture player max-HP, for one line.
+
+    The advanced-param subject GUID sits at a layout-stable index (the prefix before it
+    is fixed); the leading advanced fields are infoGUID, ownerGUID, currentHP, maxHP — so
+    maxHP is reliably at si+3 (only the *later* power/position fields drift between patches).
+    """
     si = _subject_index(f[0])
     if si is None or len(f) <= si:
         return
     guid = f[si]
-    if not is_creature(guid):
-        return
     # The subject's name/flags are whichever of source/dest carries this GUID.
     if len(f) > 3 and f[1] == guid:
         name, flags = f[2], f[3]
     elif len(f) > 7 and f[5] == guid:
         name, flags = f[6], f[7]
     else:
-        name, flags = "", ""
+        return
+    # Player as the advanced subject (e.g. taking damage) → record real max HP. WCL actor
+    # names drop the realm, so key by the char name (before the first '-').
+    if guid.startswith("Player-"):
+        if len(f) > si + 3 and f[si + 3].isdigit():
+            mh = int(f[si + 3])
+            short = name.split("-", 1)[0]
+            if mh > player_hp.get(short, 0):
+                player_hp[short] = mh
+        return
+    if not is_creature(guid):
+        return
     if not _is_hostile(flags):      # exclude friendly pets/summons (Niuzao, Wild Imp, …)
         return
     pos = _find_position(f, si + 1)
@@ -201,14 +216,16 @@ def _group_by_npc(by_guid: dict[str, dict[str, Any]]) -> dict[int, list[dict[str
     return out
 
 
-def extract_all(path: Path) -> dict[str, dict[int, list[dict[str, Any]]]]:
-    """Single streaming pass over the whole log → {dungeon_name: {npc_id: [spawn, ...]}}.
+def extract_all(path: Path) -> dict[str, dict[str, Any]]:
+    """Single streaming pass over the whole log → {dungeon_name: {"mobs": {npc_id:[spawn]},
+    "player_max_hp": {char_name: hp}}}.
 
     Each spawn is {guid, npc_id, name, x, y, map_id, t, events} — one per distinct engaged
     creature. Runs of the same dungeon are merged. Only mobs that produced combat events
     appear, so these are exactly the spawns that were pulled.
     """
     by_dungeon_guid: dict[str, dict[str, dict[str, Any]]] = {}
+    by_dungeon_hp: dict[str, dict[str, int]] = {}
     display: dict[str, str] = {}
     cur: str | None = None
     with path.open("r", encoding="utf-8", errors="replace") as fh:
@@ -223,6 +240,7 @@ def extract_all(path: Path) -> dict[str, dict[int, list[dict[str, Any]]]]:
                     cur = _norm(name)
                     display.setdefault(cur, name)
                     by_dungeon_guid.setdefault(cur, {})
+                    by_dungeon_hp.setdefault(cur, {})
                 elif f[0] == "CHALLENGE_MODE_END":
                     cur = None
                 continue
@@ -230,27 +248,35 @@ def extract_all(path: Path) -> dict[str, dict[int, list[dict[str, Any]]]]:
                 continue
             split = _split_line(line)
             if split:
-                _record(split[1], by_dungeon_guid[cur], split[0])
-    return {display[nrm]: _group_by_npc(gm) for nrm, gm in by_dungeon_guid.items()}
+                _record(split[1], by_dungeon_guid[cur], by_dungeon_hp[cur], split[0])
+    return {display[nrm]: {"mobs": _group_by_npc(gm), "player_max_hp": by_dungeon_hp[nrm]}
+            for nrm, gm in by_dungeon_guid.items()}
+
+
+# Bump when the extract_all output shape changes, so stale caches are rejected.
+_CACHE_VERSION = 2
 
 
 def load_positions(cache_dir: Path, archive: Path | None = None, *, refresh: bool = False
-                   ) -> dict[str, dict[int, list[dict[str, Any]]]]:
-    """Cached extract_all: re-parses only when the archive changes. {} if no archive.
+                   ) -> dict[str, dict[str, Any]]:
+    """Cached extract_all: re-parses only when the archive (or output shape) changes.
 
-    Keyed by dungeon name; inner keys (npc_id) are ints (restored after JSON round-trip).
+    {dungeon: {"mobs": {npc_id:[spawn]}, "player_max_hp": {name:hp}}}; npc_id keys are
+    restored to int after the JSON round-trip. {} if no archive.
     """
     archive = archive or find_archive()
     if archive is None:
         return {}
     cache = cache_dir / "combatlog_positions.json"
-    key = f"{archive}:{int(archive.stat().st_mtime)}"
+    key = f"v{_CACHE_VERSION}:{archive}:{int(archive.stat().st_mtime)}"
     if cache.exists() and not refresh:
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
             if data.get("_key") == key:
-                return {d: {int(n): sp for n, sp in m.items()} for d, m in data["runs"].items()}
-        except (json.JSONDecodeError, OSError, KeyError):
+                return {d: {"mobs": {int(n): sp for n, sp in e.get("mobs", {}).items()},
+                            "player_max_hp": e.get("player_max_hp", {})}
+                        for d, e in data["runs"].items()}
+        except (json.JSONDecodeError, OSError, KeyError, ValueError):
             pass
     runs = extract_all(archive)
     try:
@@ -260,15 +286,20 @@ def load_positions(cache_dir: Path, archive: Path | None = None, *, refresh: boo
     return runs
 
 
+def for_dungeon(log_positions: dict[str, dict[str, Any]], dungeon: str) -> dict[str, Any] | None:
+    """Look up a dungeon's log entry by normalized name."""
+    for name, entry in log_positions.items():
+        if _norm(name) == _norm(dungeon):
+            return entry
+    return None
+
+
 def extract_mob_positions(
     path: Path, dungeon: str, key_level: int | None = None
 ) -> dict[int, list[dict[str, Any]]]:
-    """Convenience single-dungeon view of extract_all (matches by normalized name)."""
-    allp = extract_all(path)
-    for name, d in allp.items():
-        if _norm(name) == _norm(dungeon):
-            return d
-    return {}
+    """Convenience single-dungeon view of extract_all's mob positions (by normalized name)."""
+    entry = for_dungeon(extract_all(path), dungeon)
+    return entry["mobs"] if entry else {}
 
 
 def locate_off_route(

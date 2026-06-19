@@ -264,17 +264,20 @@ query ($code: String!, $fightID: Int!, $startTime: Float!, $endTime: Float!) {
 """
 
 
-def fetch_damage_done(client: WCLClient, code: str, fight: Fight) -> dict[int, dict[str, int]]:
-    """Per-player damage done for a fight: {actor_id: {"total": int, "active_ms": int}}.
+def fetch_damage_done(client: WCLClient, code: str, fight: Fight,
+                      start_ms: int | None = None, end_ms: int | None = None) -> dict[int, dict[str, int]]:
+    """Per-player damage done for a fight (or a sub-window): {actor_id: {"total", "active_ms"}}.
 
     Uses the WCL `table` aggregate (cheap) instead of the Damage event stream. Pet
     damage is folded into the owning player (entries carry `petOwner` when the row is
     a pet). `total` is effective damage; `activeTime` is ms the source was in combat.
+    Pass start_ms/end_ms (report-relative, as in event timestamps) to scope to one pull.
     """
     res = client.query(
         _DAMAGE_TABLE_Q,
         {"code": code, "fightID": fight.id,
-         "startTime": float(fight.start_time), "endTime": float(fight.end_time)},
+         "startTime": float(start_ms if start_ms is not None else fight.start_time),
+         "endTime": float(end_ms if end_ms is not None else fight.end_time)},
     )
     table = res["data"]["reportData"]["report"].get("table") or {}
     # The table scalar is the parsed JSON object; entries live under data.entries.

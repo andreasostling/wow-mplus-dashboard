@@ -415,8 +415,14 @@ def classify_fight(
     knobs: Knobs,
     roles: dict[int, tuple[str, str]],  # actor_id -> (role, spec)
     healer_mana_series: list[tuple[int, int, int]] | None = None,
+    real_max_hp: dict[str, int] | None = None,  # char_name -> true max HP (from local log)
 ) -> tuple[list[DeathFinding], list[dict[str, Any]]]:
-    """Returns (death findings, per-pull CC tallies)."""
+    """Returns (death findings, per-pull CC tallies).
+
+    When real_max_hp (from the local advanced combat log) has the victim, it replaces the
+    backward-reconstructed max-HP estimate — sharpening one-shot detection, the healer
+    low-HP floor, and the defensive lethal-margin test, which all key off max HP."""
+    real_max_hp = real_max_hp or {}
     fight = fe.fight
     actors = rep.actors
     deaths = fe.of("Deaths")
@@ -475,6 +481,10 @@ def classify_fight(
         trace, max_hp, pre_kill_hp, kb_amount, overkill = _reconstruct_hp(
             ts, dmg, heals, knobs.window_cap_ms, d.get("killingAbilityGameID", 0)
         )
+        # Prefer the real max-HP from the local combat log over the reconstructed estimate.
+        rmh = real_max_hp.get(target.name, 0)
+        if rmh > 0:
+            max_hp = rmh
         win_start = _window_start(trace, ts, max_hp, knobs)
 
         window = [e for e in dmg if win_start <= e["timestamp"] <= ts]
