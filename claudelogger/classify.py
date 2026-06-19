@@ -104,6 +104,7 @@ class DefensiveAssessment:
     active_at_death: list[str]      # defensives already up when they died
     would_have_saved: list[str]     # available ones whose mitigation covers the lethal margin
     externals_available: list[str]  # teammate externals (e.g. Ironbark) off cooldown
+    big_predictable: bool = False   # lethal damage was a big, telegraphed hit (channel/DoT/known mechanic)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +112,7 @@ class DefensiveAssessment:
             "active_at_death": self.active_at_death,
             "would_have_saved": self.would_have_saved,
             "externals_available": self.externals_available,
+            "big_predictable": self.big_predictable,
         }
 
 
@@ -318,18 +320,42 @@ def _seconds_below(trace: list[tuple[int, int]], start: int, end: int, hp_floor:
     return secs
 
 
+def _is_big_predictable(top: Contribution | None, max_hp: int, knobs: Knobs) -> bool:
+    """Was the lethal damage a big, *telegraphed* event a player could pre-empt with a
+    defensive — as opposed to a chaotic pile-on, a threat/pickup death, or steady melee?
+
+    True only when ONE ability dominates the lethal window, is large relative to max HP,
+    and is either a sustained channel/DoT (multi-tick — you watch it tick and react) or a
+    catalogued (MDT-known) mechanic the player is expected to anticipate. This is the
+    "long channel / strong DoT / known one-shot you should have defensived for" case.
+    """
+    if top is None or max_hp <= 0 or top.is_self_or_friendly or top.is_environment:
+        return False
+    # Generic melee/physical is a threat/pickup or tank-tuning issue, never a
+    # "pre-empt the telegraphed cast" defensive case — even if MDT lists the id.
+    if top.ability_name.strip().lower() in ("melee", "", "physical"):
+        return False
+    dominant = top.pct >= knobs.defensive_dominant_frac
+    big = top.amount >= knobs.defensive_big_hp_frac * max_hp
+    sustained = top.periodic and top.ticks >= knobs.defensive_channel_min_ticks
+    catalogued = top.interruptible_src == "mdt"   # MDT lists it => a documented mechanic
+    return dominant and big and (sustained or catalogued)
+
+
 def _assess_defensives(
     death_ts: int,
     victim: Actor,
     casts_by_source: dict[int, list[dict]],
     kb_amount: int,
     overkill: int,
-    one_shot: bool,
+    big_predictable: bool,
 ) -> DefensiveAssessment:
     """Did the victim (or a teammate) have a defensive off cooldown that would have
     covered the lethal margin? Conservative: counts class-baseline defensives plus
-    anything actually cast in the fight, and only claims 'would have saved' when
-    mitigation * killing_blow > overkill and the death wasn't an un-reactable one-shot.
+    anything actually cast in the fight. 'Would have saved' is only ever claimed when the
+    death was a big, predictable hit (see _is_big_predictable) AND the defensive's
+    mitigation covers the lethal margin (mitigation * killing_blow > overkill) — so it
+    means "you should have pre-pressed for this", not merely "you had a CD up when you died".
     """
     own = casts_by_source.get(victim.id, [])
     # Defensives we can prove the victim has: baseline-for-class + cast-in-fight.
@@ -351,7 +377,7 @@ def _assess_defensives(
         if on_cd:
             continue
         available.append(name)
-        if not one_shot and kb_amount > 0 and mit * kb_amount > overkill:
+        if big_predictable and kb_amount > 0 and mit * kb_amount > overkill:
             would_save.append(name)
 
     # Teammate externals off cooldown that landed on (or could have) the victim.
@@ -365,13 +391,14 @@ def _assess_defensives(
                 continue
             if (death_ts - max(ext_casts)) >= cd_s * 1000:
                 externals.append(name)
-                if not one_shot and kb_amount > 0 and mit * kb_amount > overkill and name not in would_save:
+                if big_predictable and kb_amount > 0 and mit * kb_amount > overkill and name not in would_save:
                     would_save.append(f"{name} (external)")
     return DefensiveAssessment(
         available=sorted(set(available)),
         active_at_death=sorted(set(active)),
         would_have_saved=sorted(set(would_save)),
         externals_available=sorted(set(externals)),
+        big_predictable=big_predictable,
     )
 
 
@@ -473,12 +500,15 @@ def classify_fight(
         if bucket == INTERRUPT and pull_index in starved_pulls:
             confidence = min(0.97, confidence + 0.1)
             notes.append("This pull was CC-starved (more interruptible casts leaked than the comp had kicks/stuns for).")
-        defensives = _assess_defensives(ts, target, casts_by_source, kb_amount, overkill, one_shot)
+        big_predictable = _is_big_predictable(meaningful[0] if meaningful else None, max_hp, knobs)
+        defensives = _assess_defensives(ts, target, casts_by_source, kb_amount, overkill, big_predictable)
         if defensives.would_have_saved:
-            notes.append("A defensive was available that would likely have survived this: "
-                         + ", ".join(defensives.would_have_saved) + ".")
-        elif not one_shot and not defensives.available and not defensives.externals_available:
-            notes.append("No personal defensive was off cooldown — genuinely hard to survive personally.")
+            notes.append("Big, predictable hit ("
+                         + meaningful[0].ability_name + ") — pre-empt with a defensive; one was off cooldown that "
+                         "covers the lethal margin: " + ", ".join(defensives.would_have_saved) + ".")
+        elif big_predictable and not defensives.available and not defensives.externals_available:
+            notes.append("Big, predictable hit (" + meaningful[0].ability_name
+                         + ") but no personal defensive was off cooldown — genuinely hard to survive personally.")
 
         findings.append(
             DeathFinding(

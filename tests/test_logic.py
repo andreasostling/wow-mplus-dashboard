@@ -14,7 +14,7 @@ import unittest
 from claudelogger import classify, knowledge, mdt, pulls, report, keystone
 from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
-    _overlapping_cc, _reconstruct_hp,
+    _is_big_predictable, _overlapping_cc, _reconstruct_hp,
 )
 from claudelogger.config import Knobs
 from claudelogger.fetch import Actor, Fight, FightEvents, ReportData
@@ -136,29 +136,66 @@ class TestDecideBucket(unittest.TestCase):
 # --------------------------------------------------------------------------
 # defensive assessment
 # --------------------------------------------------------------------------
+class TestBigPredictable(unittest.TestCase):
+    """The gate for 'a defensive would have saved this': big, telegraphed hits only."""
+    def test_catalogued_big_hit(self):
+        c = contrib(pct=0.8, amount=70000, interruptible_src="mdt")  # MDT-known mechanic
+        self.assertTrue(_is_big_predictable(c, 100000, Knobs()))
+
+    def test_sustained_channel_or_dot(self):
+        c = contrib(pct=0.7, amount=60000, periodic=True, ticks=5)   # long DoT/channel
+        self.assertTrue(_is_big_predictable(c, 100000, Knobs()))
+
+    def test_not_dominant_is_false(self):
+        c = contrib(pct=0.3, amount=70000, interruptible_src="mdt")  # pile-on, not one source
+        self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
+
+    def test_not_big_is_false(self):
+        c = contrib(pct=0.9, amount=30000, interruptible_src="mdt")  # small chip vs 100k HP
+        self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
+
+    def test_unknown_big_single_hit_is_false(self):
+        # Big and dominant, but not a known mechanic and not a sustained channel/DoT:
+        # we don't tell the player to defensive for an unpredictable hit.
+        c = contrib(pct=0.9, amount=80000)
+        self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
+
+    def test_environment_and_self_excluded(self):
+        env = contrib(pct=1.0, amount=90000, is_environment=True, interruptible_src="mdt")
+        self.assertFalse(_is_big_predictable(env, 100000, Knobs()))  # ground = move, not defensive
+        self.assertFalse(_is_big_predictable(None, 100000, Knobs()))
+
+    def test_generic_melee_excluded_even_if_catalogued(self):
+        # Melee = threat/pickup/tank-tuning, never "pre-empt the cast" — even if its
+        # ability id happens to appear in MDT data.
+        c = contrib(pct=1.0, amount=90000, ability_name="Melee", interruptible_src="mdt")
+        self.assertFalse(_is_big_predictable(c, 100000, Knobs()))
+
+
 class TestAssessDefensives(unittest.TestCase):
     def setUp(self):
         self.monk = Actor(id=1, name="Chibes", type="Player", sub_type="Monk")
 
-    def test_baseline_available_and_would_save(self):
-        a = _assess_defensives(100000, self.monk, {1: []}, kb_amount=100000, overkill=10000, one_shot=False)
-        self.assertIn("Celestial Brew", a.available)         # baseline, never on CD
-        self.assertIn("Celestial Brew", a.would_have_saved)  # 0.30*100k > 10k overkill
-
-    def test_oneshot_never_claims_would_save(self):
-        a = _assess_defensives(100000, self.monk, {1: []}, kb_amount=100000, overkill=10000, one_shot=True)
-        self.assertEqual(a.would_have_saved, [])
+    def test_would_save_only_on_big_predictable(self):
+        # Same death, mitigation covers the margin: would_have_saved iff big_predictable.
+        yes = _assess_defensives(100000, self.monk, {1: []}, 100000, 10000, big_predictable=True)
+        self.assertIn("Celestial Brew", yes.available)         # baseline, never on CD
+        self.assertIn("Celestial Brew", yes.would_have_saved)  # 0.30*100k > 10k overkill
+        self.assertTrue(yes.big_predictable)
+        no = _assess_defensives(100000, self.monk, {1: []}, 100000, 10000, big_predictable=False)
+        self.assertIn("Celestial Brew", no.available)          # still off cooldown...
+        self.assertEqual(no.would_have_saved, [])              # ...but not flagged as a save
 
     def test_recent_cast_is_on_cooldown(self):
         # Celestial Brew (60s CD) cast 30s before death -> still on CD, not available.
         casts = {1: [{"abilityGameID": 322507, "timestamp": 70000}]}
-        a = _assess_defensives(100000, self.monk, casts, kb_amount=100000, overkill=10000, one_shot=False)
+        a = _assess_defensives(100000, self.monk, casts, 100000, 10000, big_predictable=True)
         self.assertNotIn("Celestial Brew", a.available)
 
     def test_external_off_cooldown_is_listed(self):
         # Teammate cast Ironbark (90s CD) 100s ago -> off CD now, counts as available.
         casts = {1: [], 2: [{"abilityGameID": 102342, "timestamp": 0}]}
-        a = _assess_defensives(100000, self.monk, casts, kb_amount=100000, overkill=5000, one_shot=False)
+        a = _assess_defensives(100000, self.monk, casts, 100000, 5000, big_predictable=True)
         self.assertIn("Ironbark", a.externals_available)
 
 

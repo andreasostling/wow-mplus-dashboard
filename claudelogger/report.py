@@ -406,6 +406,8 @@ _HTML = r"""<!doctype html>
   th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
   th{color:var(--mut);cursor:pointer;user-select:none;font-weight:600}
   tr:last-child td{border-bottom:none}
+  table.kv{margin:0 0 4px} table.kv th{cursor:default;width:120px;vertical-align:top}
+  table.kv td{color:var(--ink)}
   .pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600}
   .b-interrupt{background:#3a2c12;color:var(--warn)} .b-stun{background:#3a1f1f;color:var(--bad)}
   .b-ground{background:#123a2c;color:var(--ok)} .b-oneshot{background:#222;color:var(--mut)}
@@ -504,9 +506,10 @@ function renderBriefing(){
   const kr = keys.length? (keys.length===1?`+${keys[0]}`:`+${keys[0]}–+${keys[keys.length-1]}`):'?';
   box.append(el(`<p class="sub">${b.runs} run(s) at ${kr} · ${b.total_deaths} deaths ·
     CC-starved pulls ${b.cc_starved_pulls}/${b.pulls}</p>`));
-  box.append(el(`<div class="verdict" style="border-left-color:var(--warn)"><b>Your CC:</b>
-    interrupts — ${esc((b.comp_interrupts||[]).join(', ')||'—')}; stuns — ${esc((b.comp_stuns||[]).join(', ')||'—')};
-    other CC — ${esc((b.comp_other_cc||[]).join(', ')||'—')}.</div>`));
+  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🧰 Your CC</h3>'));
+  const ccRows = [['Interrupts', b.comp_interrupts], ['True stuns', b.comp_stuns], ['Other CC', b.comp_other_cc]];
+  box.append(el(`<table class="kv"><tbody>${ccRows.map(([k,v])=>
+    `<tr><th>${k}</th><td>${esc((v||[]).join(', ')||'—')}</td></tr>`).join('')}</tbody></table>`));
   const tbl = el('<table><thead><tr><th>Do this</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Why / how</th></tr></thead><tbody></tbody></table>');
   const tb = tbl.querySelector('tbody');
   (b.threats||[]).slice(0,20).forEach(t=>{
@@ -603,7 +606,7 @@ function render(){
     const heal=`<span class="${hm[1]}" title="${esc(d.healer.detail||'')}">${esc(hm[0])}</span>`;
     const dv=d.defensives||{};
     const def=(dv.would_have_saved&&dv.would_have_saved.length)
-        ?`<span class="av-yes" title="off cooldown, mitigation covers the lethal margin">${esc(dv.would_have_saved.join(', '))}</span>`
+        ?`<span class="av-yes" title="big, predictable hit (channel/DoT/known mechanic) — this defensive was off cooldown and covers the lethal margin">${esc(dv.would_have_saved.join(', '))}</span>`
         :(dv.available&&dv.available.length)
         ?`<span class="muted" title="off cooldown but mitigation may not have covered it">had: ${esc(dv.available.join(', '))}</span>`
         :'<span class="muted">none up</span>';

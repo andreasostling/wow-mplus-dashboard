@@ -58,6 +58,14 @@ class Knobs:
     healer_cc_max_ms: int = 10_000       # cap an unclosed healer-CC aura (a missed removedebuff,
                                          # e.g. healer died under it) to this many ms
 
+    # "Would a defensive have saved this?" should fire only for a big, *predictable*
+    # hit the player can pre-empt — not for any death that happened to have a CD up.
+    # The lethal damage must be dominated by one ability, large vs max HP, and either
+    # a sustained channel/DoT (multi-tick) or an MDT-catalogued (known) mechanic.
+    defensive_dominant_frac: float = 0.5   # one ability is >= this share of lethal-window damage
+    defensive_big_hp_frac: float = 0.5     # ...and dealt >= this fraction of max HP
+    defensive_channel_min_ticks: int = 3   # a periodic source with >= this many ticks = a channel/DoT
+
     # Confidence: empirical + curated agreement => high; single weak source => review.
     review_below_confidence: float = 0.5
 
