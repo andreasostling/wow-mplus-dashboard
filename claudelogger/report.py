@@ -551,10 +551,22 @@ _HTML = r"""<!doctype html>
   .cde{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;align-items:start}
   .cde h4{margin:0 0 6px;font-size:13px} .cde .role{color:var(--mut);font-weight:400;font-size:11px}
   .low{color:var(--bad)} .ok-use{color:var(--ok)}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:18px 0 0}
+  .tab{background:none;border:none;color:var(--mut);padding:10px 16px;font:600 13px/1 system-ui,Segoe UI,Roboto,sans-serif;
+       cursor:pointer;border-bottom:2px solid transparent;text-transform:uppercase;letter-spacing:.05em}
+  .tab:hover{color:var(--ink)} .tab.active{color:var(--ink);border-bottom-color:var(--accent)}
+  .tabpanel{display:none} .tabpanel.active{display:block}
 </style></head>
 <body><div class="wrap">
   <h1>ClaudeLogger — Mythic+ Death Analysis</h1>
   <p class="sub" id="sub"></p>
+
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-tab="deaths">Deaths &amp; survival</button>
+    <button class="tab" data-tab="dps">DPS &amp; SimC</button>
+  </div>
+
+  <div class="tabpanel active" id="tab-deaths">
   <div class="cards" id="cards"></div>
 
   <h2>Pre-run briefing — pull this up before a key</h2>
@@ -570,6 +582,23 @@ _HTML = r"""<!doctype html>
   <h2>Interruptible casts that leaked (pull-level)</h2>
   <div class="bars" id="leaked"></div>
 
+  <h2>Every death</h2>
+  <div class="controls">
+    <select id="fDungeon"><option value="">All dungeons</option></select>
+    <select id="fPlayer"><option value="">All players</option></select>
+    <select id="fBucket"><option value="">All causes</option></select>
+    <label class="muted"><input type="checkbox" id="fAvoid"> avoidable only</label>
+    <label class="muted"><input type="checkbox" id="fHideCascade" checked> hide wipe-cascade</label>
+  </div>
+  <table id="deaths"><thead><tr>
+    <th data-k="dungeon">Dungeon</th><th data-k="player">Player</th><th data-k="role">Role</th>
+    <th data-k="time_in_fight_s">t(s)</th><th data-k="killer">Killer</th>
+    <th data-k="bucket">Cause</th><th data-k="avoidable">Avoid?</th>
+    <th data-k="confidence">Conf</th><th>Breakdown</th><th>Healer</th><th>Defensive</th>
+  </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="tabpanel" id="tab-dps">
   <h2>Run debrief — time, DPS &amp; cooldowns</h2>
   <div class="controls"><select id="fRun"></select></div>
   <div id="run-debrief"></div>
@@ -585,21 +614,7 @@ _HTML = r"""<!doctype html>
   <div class="controls"><select id="fRouteDungeon"></select></div>
   <div id="route-analysis"></div>
   </div>
-
-  <h2>Every death</h2>
-  <div class="controls">
-    <select id="fDungeon"><option value="">All dungeons</option></select>
-    <select id="fPlayer"><option value="">All players</option></select>
-    <select id="fBucket"><option value="">All causes</option></select>
-    <label class="muted"><input type="checkbox" id="fAvoid"> avoidable only</label>
-    <label class="muted"><input type="checkbox" id="fHideCascade" checked> hide wipe-cascade</label>
   </div>
-  <table id="deaths"><thead><tr>
-    <th data-k="dungeon">Dungeon</th><th data-k="player">Player</th><th data-k="role">Role</th>
-    <th data-k="time_in_fight_s">t(s)</th><th data-k="killer">Killer</th>
-    <th data-k="bucket">Cause</th><th data-k="avoidable">Avoid?</th>
-    <th data-k="confidence">Conf</th><th>Breakdown</th><th>Healer</th><th>Defensive</th>
-  </tr></thead><tbody></tbody></table>
 
   <footer id="foot"></footer>
 </div>
@@ -622,6 +637,14 @@ const bucketLabel = {
   needs_review:["Review","b-oneshot"]};
 const el = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild;};
 const esc = (s)=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// ---- Tabs ----
+document.querySelectorAll('#tabs .tab').forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll('#tabs .tab').forEach(b=>b.classList.toggle('active', b===btn));
+    document.querySelectorAll('.tabpanel').forEach(p=>p.classList.toggle('active', p.id==='tab-'+btn.dataset.tab));
+  };
+});
 
 // ---- Dungeon dropdown sync ----
 // Every per-dungeon dropdown registers here so changing one changes them all.
