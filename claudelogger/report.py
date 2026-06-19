@@ -442,8 +442,8 @@ _HTML = r"""<!doctype html>
   .av-yes{color:var(--bad);font-weight:700} .av-no{color:var(--ok)} .av-null{color:var(--mut)}
   .bars{display:flex;flex-direction:column;gap:6px}
   .bar{display:grid;grid-template-columns:180px 1fr 48px;gap:8px;align-items:center}
-  .bar .track{background:var(--line);border-radius:5px;height:16px;overflow:hidden}
-  .bar .fill{height:100%;background:var(--accent);border-radius:5px}
+  .bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
+  .bar .fill{height:100%;background:var(--accent);min-width:4px}
   .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
   select,input{background:var(--card);color:var(--ink);border:1px solid var(--line);
                border-radius:7px;padding:6px 8px}
