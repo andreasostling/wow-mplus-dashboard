@@ -542,11 +542,7 @@ def run_dungeon_sims(
                   file=sys.stderr)
             continue
 
-        # Tanks don't support DungeonRoute fight_style in simc — sim them
-        # with a Patchwerk equivalent instead (overall DPS/DTPS estimate).
         use_route = route_text
-        if profile.role == "tank":
-            use_route = _make_tank_profile(route_text)
 
         print(f"  simc: simming {profile.name} ({profile.spec} {profile.simc_class}) in {dungeon}…",
               file=sys.stderr)
@@ -564,30 +560,6 @@ def run_dungeon_sims(
 
     return results
 
-
-def _make_tank_profile(route_text: str) -> str:
-    """Convert a DungeonRoute profile to a Patchwerk sim for tanks.
-
-    SimC's DungeonRoute fight_style doesn't support tank specs. We extract the
-    dungeon timer from the route and sim the tank with a standard fight.
-    """
-    # Extract max_time from route
-    m = re.search(r"^max_time=(\d+)", route_text, re.MULTILINE)
-    max_time = int(m.group(1)) if m else 1800
-
-    # Keep buff overrides from the route
-    buff_lines = []
-    for line in route_text.splitlines():
-        if line.startswith("override."):
-            buff_lines.append(line)
-
-    lines = [
-        "fight_style=Patchwerk",
-        f"max_time={max_time}",
-        "single_actor_batch=1",
-    ] + buff_lines
-
-    return "\n".join(lines)
 
 
 def _inject_group_buffs(route_text: str, profiles: list[PlayerProfile]) -> str:
