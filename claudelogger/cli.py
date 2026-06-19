@@ -11,7 +11,7 @@ import sys
 
 import re
 
-from . import fetch, keystone, knowledge, mdt, report, simc, route_analysis
+from . import fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog
 from .classify import classify_fight
 from .config import Config, DUNGEON_SLUGS, REPO_ROOT
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
@@ -86,6 +86,7 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
                 entry["stop_threats"].append({"mob": mob, "npc_id": nid, "spells": sorted(labeled)})
         entry["threats"].sort(key=lambda t: t["mob"])
         entry["stop_threats"].sort(key=lambda t: t["mob"])
+        entry["npc_ids"] = r.get("npc_ids", [])   # needed by _merge_route_info off-route detection
         entry["n_npcs"] = len(r.get("npc_ids", []))
         info.append(entry)
     return info
@@ -145,6 +146,21 @@ def analyze_report(
              "spec": roles.get(a.id, ("", ""))[1], "class": a.sub_type}
             for a in rep.party(fight)
         ]
+        # Post-run performance: time-loss + actual DPS, and cooldown/defensive economy.
+        dmg_done = fetch.fetch_damage_done(client, code, fight)
+        timing = run_analysis.analyze_run(
+            fight, pull_tallies, findings, dmg_done, rep, roles,
+            kb.boss_npc_game_ids or set(), cfg.simc.death_penalty_s, cfg.knobs.downtime_gap_s,
+        )
+        tank_id = next((aid for aid in fight.friendly_players
+                        if roles.get(aid, ("", ""))[1] == "Brewmaster"), None)
+        shuffle_buffs = (
+            fetch.fetch_buffs(client, code, fight, tank_id, {cd_economy.SHUFFLE_AURA})
+            if tank_id is not None else []
+        )
+        cdecon = cd_economy.analyze_cd_economy(
+            fight, fe, rep, roles, findings, timing["combat_s"], cfg.knobs, shuffle_buffs,
+        )
         # Mobs observed applying a fixate aura (warn about these even if no death resulted).
         fixate_mobs = sorted({
             rep.actors[e["sourceID"]].name
@@ -153,7 +169,8 @@ def analyze_report(
             and e.get("sourceID") in rep.actors and not rep.actors[e["sourceID"]].is_player
             and knowledge.is_fixate(e.get("abilityGameID", 0), rep.ability_name(e.get("abilityGameID", 0)))
         })
-        runs.append(report.build_run(code, fight, party, _comp_cc_labels(kb), findings, pull_tallies, fixate_mobs))
+        runs.append(report.build_run(code, fight, party, _comp_cc_labels(kb), findings,
+                                     pull_tallies, fixate_mobs, timing, cdecon))
     return runs
 
 
@@ -185,7 +202,12 @@ def cmd_season(args) -> int:
 
 def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None) -> None:
     season = report.build_season(runs)
-    briefings = report.build_dungeon_briefings(runs, route_info)
+    # Exact mob positions from the local advanced combat log (off-route localization).
+    log_positions = combatlog.load_positions(cfg.cache_dir)
+    if log_positions:
+        print(f"combat log: positions for {len(log_positions)} dungeon run(s) "
+              f"({combatlog.find_archive()})", file=sys.stderr)
+    briefings = report.build_dungeon_briefings(runs, route_info, log_positions)
     jpath = report.write_json(cfg.out_dir, season, runs, briefings)
     hpath = report.write_html(cfg.out_dir, season, runs, briefings)
     report.write_html_artifact(cfg.out_dir, season, runs, briefings)

@@ -80,7 +80,7 @@ COMP_CC_SEED: dict[int, tuple[str, str]] = {
     710: ("Banish", "incap"),                     # Warlock
     99: ("Incapacitating Roar", "incap"),         # Druid
     360806: ("Sleep Walk", "incap"),              # Evoker
-    9484: ("Shackle Undead", "incap"),            # Priest
+    9484: ("Shackle Horror", "incap"),            # Priest (Midnight: renamed from Shackle Undead)
     # --- disorient ---
     31661: ("Dragon's Breath", "disorient"),      # Mage (Fire)
     33786: ("Cyclone", "disorient"),              # Druid — banish-style
@@ -107,7 +107,7 @@ COMP_CC_SEED: dict[int, tuple[str, str]] = {
     157997: ("Ice Nova", "root"),                 # Mage
     339: ("Entangling Roots", "root"),            # Druid
     102359: ("Mass Entanglement", "root"),        # Druid
-    64695: ("Earthgrab Totem", "root"),           # Shaman
+    64695: ("Earthgrab", "root"),                 # Shaman (id is the root effect of Earthgrab Totem)
     116706: ("Disable", "root"),                  # Monk (Windwalker)
     162480: ("Steel Trap", "root"),               # Hunter
     358385: ("Landslide", "root"),                # Evoker
