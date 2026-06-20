@@ -35,16 +35,18 @@ Outputs in `out/`: `analysis.json` (source of truth), `dashboard.html` (self-con
 
 ## SimC tooling
 
-- **Binary**: built from source at `/tmp/simc-build/build/simc` — **SimulationCraft 1205-01,
-  WoW 12.0.7 (Midnight)**. `/tmp` is ephemeral; if it's gone, rebuild (≈5 min):
+- **Binary**: built from source at `~/opt/simc-build/build/simc` — **SimulationCraft 1205-01,
+  WoW 12.0.7 (Midnight)**. To rebuild from scratch (≈5 min) or update to latest:
   ```sh
   sudo apt-get install -y cmake g++ libcurl4-openssl-dev git
-  git clone --depth 1 https://github.com/simulationcraft/simc.git /tmp/simc-build
-  cmake -S /tmp/simc-build -B /tmp/simc-build/build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF
-  cmake --build /tmp/simc-build/build -j"$(nproc)"
+  git clone --depth 1 https://github.com/simulationcraft/simc.git ~/opt/simc-build
+  cmake -S ~/opt/simc-build -B ~/opt/simc-build/build -DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF
+  cmake --build ~/opt/simc-build/build -j"$(nproc)"
   ```
-  It is NOT on PATH — every invocation must set `CLAUDELOGGER_SIMC_BINARY=/tmp/simc-build/build/simc`.
-  Reference Midnight S1 profiles ship under `/tmp/simc-build/profiles/MID1/`.
+  It is NOT on PATH — `CLAUDELOGGER_SIMC_BINARY` must point at it. The path is set in `.env`
+  (`/home/andreas/opt/simc-build/build/simc`); with `python.terminal.useEnvFile` enabled it
+  loads into integrated terminals automatically.
+  Reference Midnight S1 profiles ship under `~/opt/simc-build/profiles/MID1/`.
 - **Profile extraction needs a fight with gear**: `combatantInfo` is only present on some
   fights. The cached example's **fight 3** (Nexus-Point Xenas) has it; the latest fight (4,
   Windrunner) does NOT — `simc` auto-picks the latest and aborts with "No combatantInfo
@@ -54,7 +56,7 @@ Outputs in `out/`: `analysis.json` (source of truth), `dashboard.html` (self-con
   the others are talent-only supplements.
 - **Sample size**: `SimcKnobs.default_iterations=10000`, `target_error=0.1` (%) — converges
   to publication-grade DPS. Override via `CLAUDELOGGER_SIMC_ITERATIONS` for quick tests.
-- Full proper run: `CLAUDELOGGER_SIMC_BINARY=/tmp/simc-build/build/simc python3 -m claudelogger simc --report LZBgMVX3yrf26CKP --fight 3`
+- Full proper run (binary path comes from `.env`): `python3 -m claudelogger simc --report LZBgMVX3yrf26CKP --fight 3`
 
 ## Architecture (pipeline order)
 
