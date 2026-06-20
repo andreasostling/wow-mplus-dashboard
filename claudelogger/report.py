@@ -954,18 +954,6 @@ function renderBriefing(){
   const bcWrap = el('<div class="brief-cards"></div>');
   bCards.forEach(([l,n])=>bcWrap.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
   box.append(bcWrap);
-  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🧰 Your CC</h3>'));
-  const ccRows = [['Interrupts', b.comp_interrupts], ['True stuns', b.comp_stuns], ['Other CC', b.comp_other_cc]];
-  box.append(el(`<table class="kv"><tbody>${ccRows.map(([k,v])=>
-    `<tr><th>${k}</th><td>${esc((v||[]).join(', ')||'—')}</td></tr>`).join('')}</tbody></table>`));
-  const tbl = el('<table><thead><tr><th>Do this</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Why / how</th></tr></thead><tbody></tbody></table>');
-  const tb = tbl.querySelector('tbody');
-  (b.threats||[]).slice(0,20).forEach(t=>{
-    tb.append(el(`<tr><td><span class="pill ${actionCss[t.action]||'b-other'}">${actionIcon[t.action]||''} ${esc(t.action)}</span></td>
-      <td>${esc(t.mob)}</td><td>${esc(t.spell)}</td><td>${t.deaths}</td>
-      <td class="contrib">${esc(t.detail)}</td></tr>`));
-  });
-  box.append(tbl);
   // ---- top "before the key" panel: dangerous casts + route stop/kick targets ----
   const dangerSet = new Set(b.danger_spells||[]);
   const markSpells = (arr)=>(arr||[]).map(s=>dangerSet.has(s)?('💥 '+esc(s)):esc(s)).join(', ');
@@ -1018,61 +1006,6 @@ function renderBriefing(){
         box.append(stbl);
       }
     }
-  }
-  // 🎯 Kick priority — the ranked interrupt plan (by damage per leaked cast). The Deaths
-  // tab's "casts that leaked" is the per-pull evidence behind this ranking.
-  if((b.leaked_casts||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority — interrupt highest first <span class="muted" style="font-weight:normal">· by damage per leaked cast</span></h3>'));
-    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
-    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar bar-wide"><span>${esc(sp)}</span>
-      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span style="white-space:nowrap"><span class="muted">×${n}</span> ${Math.round((dmg||0)/1000)}k/cast</span></div>`)));
-  }
-  if((b.dangerous_casts||[]).length){
-    const allDanger=b.dangerous_casts;
-    // Tank busters (single-target hits the tank eats) are flagged via Method.gg's
-    // tank-buster tag, matched by ability name. Hidden by default — they chunk the
-    // tank, not the raid, so they're noise in the "what nearly wiped us" list.
-    const tbSet=new Set((b.guide_abilities||[]).filter(g=>(g.tags||[]).includes('tank-buster'))
-      .map(g=>(g.ability||'').toLowerCase()));
-    allDanger.forEach(c=>{c._tb=tbSet.has((c.ability||'').toLowerCase());});
-    const tbCount=allDanger.filter(c=>c._tb).length;
-    const dm=b.danger_meta||{};
-    let src='';
-    if(b.danger_source==='public'){
-      const ks=dm.key_levels||[]; const kr=ks.length?(ks.length===1?`+${ks[0]}`:`+${ks[0]}–+${ks[ks.length-1]}`):'';
-      src=` <span class="muted" style="font-weight:normal">· estimated from ${dm.n_logs||0} public log(s)${kr?` (${kr}, median)`:''} — no run of your own yet</span>`;
-    }
-    const h3=el(`<h3 class="muted" style="margin:6px 0 6px"></h3>`);
-    box.append(h3);
-    let showTb=false;
-    if(tbCount){
-      const wrap=el(`<label class="muted" style="cursor:pointer;display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:0 0 6px"><input type="checkbox"> Show tank busters (${tbCount})</label>`);
-      wrap.querySelector('input').addEventListener('change',e=>{showTb=e.target.checked;render();});
-      box.append(wrap);
-    }
-    const dtbl=el('<table><thead><tr><th>Cast</th><th>Mobs</th><th>Damage</th><th>Type</th></tr></thead><tbody></tbody></table>');
-    const db=dtbl.querySelector('tbody');
-    const render=()=>{
-      const list=allDanger.filter(c=>showTb||!c._tb);
-      const shown=list.slice(0,12);
-      const more=list.length-shown.length;
-      const hidden=showTb?0:tbCount;
-      h3.innerHTML=`💥 Most dangerous casts — these chunk or one-shot`
-        +(more>0?` <span class="muted" style="font-weight:normal">(top 12 of ${list.length})</span>`:'')
-        +(hidden?` <span class="muted" style="font-weight:normal">· ${hidden} tank buster${hidden>1?'s':''} hidden</span>`:'')+src;
-      db.innerHTML='';
-      shown.forEach(c=>{
-        const parts=[];
-        if(c.is_aoe) parts.push(`<span class="av-yes">${Math.round(c.aoe_pct*100)}% party HP</span> (${c.aoe_targets} hit)`);
-        if(c.is_spike) parts.push(`<span class="av-yes">${Math.round(c.burst_pct*100)}%</span> of one player${c.burst_s?(' in '+c.burst_s+'s'):''}`);
-        const type=(c.kind==='both'?'AoE + spike':(c.kind==='aoe'?'AoE':'spike'))+(c._tb?' · 🛡️ tank buster':'');
-        db.append(el(`<tr><td>${spellLink(c.ability, c.ability_id)}</td>
-          <td class="contrib">${esc((c.mobs||[]).join(', '))}</td>
-          <td>${parts.join(' · ')}</td><td class="muted">${type}</td></tr>`));
-      });
-    };
-    box.append(dtbl);
-    render();
   }
   // ---- Method.gg guide flags (qualitative; covers un-logged dungeons too) ----
   const GTAG={interrupt:'🛑 interrupt','stop (CC)':'💫 stop','tank buster':'🛡️ tank buster',
@@ -1129,6 +1062,73 @@ function renderBriefing(){
     const empty=el(`<div class="muted" style="font-size:11px;display:none">Nothing selected — tick a layer above to show mechanics.</div>`);
     box.append(empty);
     apply();
+  }
+  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🧰 Your CC</h3>'));
+  const ccRows = [['Interrupts', b.comp_interrupts], ['True stuns', b.comp_stuns], ['Other CC', b.comp_other_cc]];
+  box.append(el(`<table class="kv"><tbody>${ccRows.map(([k,v])=>
+    `<tr><th>${k}</th><td>${esc((v||[]).join(', ')||'—')}</td></tr>`).join('')}</tbody></table>`));
+  const tbl = el('<table><thead><tr><th>Do this</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Why / how</th></tr></thead><tbody></tbody></table>');
+  const tb = tbl.querySelector('tbody');
+  (b.threats||[]).slice(0,20).forEach(t=>{
+    tb.append(el(`<tr><td><span class="pill ${actionCss[t.action]||'b-other'}">${actionIcon[t.action]||''} ${esc(t.action)}</span></td>
+      <td>${esc(t.mob)}</td><td>${esc(t.spell)}</td><td>${t.deaths}</td>
+      <td class="contrib">${esc(t.detail)}</td></tr>`));
+  });
+  box.append(tbl);
+  // 🎯 Kick priority — the ranked interrupt plan (by damage per leaked cast). The Deaths
+  // tab's "casts that leaked" is the per-pull evidence behind this ranking.
+  if((b.leaked_casts||[]).length){
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority — interrupt highest first <span class="muted" style="font-weight:normal">· by damage per leaked cast</span></h3>'));
+    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
+    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar bar-wide"><span>${esc(sp)}</span>
+      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span style="white-space:nowrap"><span class="muted">×${n}</span> ${Math.round((dmg||0)/1000)}k/cast</span></div>`)));
+  }
+  if((b.dangerous_casts||[]).length){
+    const allDanger=b.dangerous_casts;
+    // Tank busters (single-target hits the tank eats) are flagged via Method.gg's
+    // tank-buster tag, matched by ability name. Hidden by default — they chunk the
+    // tank, not the raid, so they're noise in the "what nearly wiped us" list.
+    const tbSet=new Set((b.guide_abilities||[]).filter(g=>(g.tags||[]).includes('tank-buster'))
+      .map(g=>(g.ability||'').toLowerCase()));
+    allDanger.forEach(c=>{c._tb=tbSet.has((c.ability||'').toLowerCase());});
+    const tbCount=allDanger.filter(c=>c._tb).length;
+    const dm=b.danger_meta||{};
+    let src='';
+    if(b.danger_source==='public'){
+      const ks=dm.key_levels||[]; const kr=ks.length?(ks.length===1?`+${ks[0]}`:`+${ks[0]}–+${ks[ks.length-1]}`):'';
+      src=` <span class="muted" style="font-weight:normal">· estimated from ${dm.n_logs||0} public log(s)${kr?` (${kr}, median)`:''} — no run of your own yet</span>`;
+    }
+    const h3=el(`<h3 class="muted" style="margin:6px 0 6px"></h3>`);
+    box.append(h3);
+    let showTb=false;
+    if(tbCount){
+      const wrap=el(`<label class="muted" style="cursor:pointer;display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:0 0 6px"><input type="checkbox"> Show tank busters (${tbCount})</label>`);
+      wrap.querySelector('input').addEventListener('change',e=>{showTb=e.target.checked;render();});
+      box.append(wrap);
+    }
+    const dtbl=el('<table><thead><tr><th>Cast</th><th>Mobs</th><th>Damage</th><th>Type</th></tr></thead><tbody></tbody></table>');
+    const db=dtbl.querySelector('tbody');
+    const render=()=>{
+      const list=allDanger.filter(c=>showTb||!c._tb);
+      const shown=list.slice(0,12);
+      const more=list.length-shown.length;
+      const hidden=showTb?0:tbCount;
+      h3.innerHTML=`💥 Most dangerous casts — these chunk or one-shot`
+        +(more>0?` <span class="muted" style="font-weight:normal">(top 12 of ${list.length})</span>`:'')
+        +(hidden?` <span class="muted" style="font-weight:normal">· ${hidden} tank buster${hidden>1?'s':''} hidden</span>`:'')+src;
+      db.innerHTML='';
+      shown.forEach(c=>{
+        const parts=[];
+        if(c.is_aoe) parts.push(`<span class="av-yes">${Math.round(c.aoe_pct*100)}% party HP</span> (${c.aoe_targets} hit)`);
+        if(c.is_spike) parts.push(`<span class="av-yes">${Math.round(c.burst_pct*100)}%</span> of one player${c.burst_s?(' in '+c.burst_s+'s'):''}`);
+        const type=(c.kind==='both'?'AoE + spike':(c.kind==='aoe'?'AoE':'spike'))+(c._tb?' · 🛡️ tank buster':'');
+        db.append(el(`<tr><td>${spellLink(c.ability, c.ability_id)}</td>
+          <td class="contrib">${esc((c.mobs||[]).join(', '))}</td>
+          <td>${parts.join(' · ')}</td><td class="muted">${type}</td></tr>`));
+      });
+    };
+    box.append(dtbl);
+    render();
   }
   if((b.fixate_mobs||[]).length){
     box.append(el('<h3 class="muted" style="margin:16px 0 6px">⚡ Fixate mobs — peel/kite (ignores threat)</h3>'));
