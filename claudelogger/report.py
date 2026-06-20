@@ -911,7 +911,9 @@ function renderBriefing(){
     const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
     topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
     // Role filter — toggle which roles' mechanics are shown (all on by default).
+    // Interrupts-only filter — restrict to interrupt mechanics (on by default).
     const checked=new Set(['tank','healer','dps']);
+    let interruptsOnly=true;
     const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show for:</span></div>`);
     const gtbl=el('<table><thead><tr><th>Ability</th><th>Mob</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
     const gb=gtbl.querySelector('tbody');
@@ -921,9 +923,11 @@ function renderBriefing(){
       const tr=el(`<tr><td>${spellLink(a.ability, a.spell_id)}</td><td class="muted">${esc(a.mob)}</td>
         <td${a.note?` title="${esc(a.note)}"`:''}>${pills}</td></tr>`);
       tr._roles=rowRoles(a.tags);
+      tr._isInterrupt=(a.tags||[]).includes('interrupt');
       gb.append(tr); trs.push(tr);
     });
-    const apply=()=>{let shown=0;trs.forEach(tr=>{const vis=[...tr._roles].some(r=>checked.has(r));
+    const apply=()=>{let shown=0;trs.forEach(tr=>{
+      const vis=[...tr._roles].some(r=>checked.has(r)) && (!interruptsOnly || tr._isInterrupt);
       tr.style.display=vis?'':'none';if(vis)shown++;});
       empty.style.display=shown?'none':'';};
     [['tank','🛡️ Tank'],['healer','💚 Healer'],['dps','⚔️ DPS']].forEach(([key,lab])=>{
@@ -931,6 +935,9 @@ function renderBriefing(){
       wrap.querySelector('input').addEventListener('change',e=>{e.target.checked?checked.add(key):checked.delete(key);apply();});
       ctrl.append(wrap);
     });
+    const iwrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center;border-left:1px solid #444;padding-left:14px"><input type="checkbox" checked> 🛑 Interrupts only</label>`);
+    iwrap.querySelector('input').addEventListener('change',e=>{interruptsOnly=e.target.checked;apply();});
+    ctrl.append(iwrap);
     topBox.append(ctrl); topBox.append(gtbl);
     const empty=el(`<div class="muted" style="font-size:11px;display:none">No abilities for the selected role(s).</div>`);
     topBox.append(empty);
