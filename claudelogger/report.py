@@ -696,7 +696,7 @@ _HTML = r"""<!doctype html>
   .bars{display:flex;flex-direction:column;gap:3px}
   .bar{display:grid;grid-template-columns:170px 1fr 44px;gap:8px;align-items:center;font-size:12px}
   .bar .track{background:var(--bg);border:1px solid var(--line);border-radius:4px;height:12px;overflow:hidden}
-  .bar .fill{height:100%;background:var(--accent);min-width:3px;border-radius:3px}
+  .bar .fill{display:block;height:100%;background:var(--accent);min-width:3px;border-radius:3px}
   .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
   select,input{background:var(--card);color:var(--ink);border:1px solid var(--line);
                border-radius:7px;padding:6px 8px}
@@ -714,7 +714,7 @@ _HTML = r"""<!doctype html>
              font-size:11px;font-weight:600}
   .pull-bar{display:grid;grid-template-columns:50px 1fr 80px;gap:6px;align-items:center;margin:2px 0}
   .pull-bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:14px;overflow:hidden;position:relative}
-  .pull-bar .fill{height:100%;min-width:2px}
+  .pull-bar .fill{display:block;height:100%;min-width:2px}
   .fill-trash{background:var(--accent)} .fill-boss{background:var(--bad)}
   .gapbar{display:grid;grid-template-columns:150px 1fr 150px;gap:8px;align-items:center;margin:3px 0}
   .gapbar .track{position:relative;background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
