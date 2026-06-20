@@ -837,6 +837,7 @@ _HTML = r"""<!doctype html>
     <th data-k="date_ms">Date</th><th data-k="dungeon">Dungeon</th><th data-k="key_level">Key</th>
     <th data-k="result_rank">Result</th><th data-k="deaths">Deaths</th>
     <th data-k="downtime_pct">Downtime</th><th data-k="group_dps">Group DPS</th>
+    <th data-k="new_best">New best</th>
   </tr></thead><tbody></tbody></table>
   <div class="contrib" style="margin-top:8px">One row per logged run. Run <code>season</code> to
     accumulate more runs over time and watch deaths/timer/DPS trend.</div>
@@ -1592,7 +1593,18 @@ if(Object.keys(routeAnalyses).length) renderRoute();
     const result_rank = t.timer_s ? (t.on_time ? (t.margin_s||0) : -Math.abs(t.margin_s||0)) : -1e12;
     return {date_ms:r.date_ms||0, dungeon:r.dungeon||'', key_level:r.key_level||0, result_rank,
             deaths:t.deaths||0, downtime_pct:(t.downtime_pct!=null?t.downtime_pct:-1),
-            group_dps, _r:r, _t:t};
+            group_dps, new_best:0, _r:r, _t:t};
+  });
+  // "New best" = this run set a record for its dungeon vs all chronologically earlier runs:
+  // higher key wins, then a better result (timed margin > over-time > untimed). Computed in
+  // date order so the flag is stable no matter how the table is sorted. The first run of a
+  // dungeon establishes its record (counts as a new best).
+  const bestByDungeon = {};
+  data.slice().sort((a,b)=>a.date_ms-b.date_ms).forEach(d=>{
+    const b = bestByDungeon[d.dungeon];
+    const better = !b || d.key_level>b.key_level || (d.key_level===b.key_level && d.result_rank>b.result_rank);
+    d.new_best = better?1:0;
+    if(better) bestByDungeon[d.dungeon] = {key_level:d.key_level, result_rank:d.result_rank};
   });
   let sortK='date_ms', sortDir=-1;  // default: most recent run on top
   function renderProg(){
@@ -1608,7 +1620,8 @@ if(Object.keys(routeAnalyses).length) renderRoute();
       tb.append(el(`<tr><td class="muted">${fmtDate(r.date_ms)}</td><td>${esc(r.dungeon)}</td>
         <td>+${r.key_level}</td><td>${result}</td><td>${t.deaths||0}</td>
         <td>${t.downtime_pct!=null?t.downtime_pct+'%':'—'}</td>
-        <td>${d.group_dps?Math.round(d.group_dps/1000)+'k':'—'}</td></tr>`));
+        <td>${d.group_dps?Math.round(d.group_dps/1000)+'k':'—'}</td>
+        <td>${d.new_best?'<span class="ok-use" title="set a new record for this dungeon — highest key, then best timed result — vs earlier runs">🌟 new best</span>':'<span class="muted">—</span>'}</td></tr>`));
     });
   }
   document.querySelectorAll('#progression th[data-k]').forEach(th=>th.onclick=()=>{
