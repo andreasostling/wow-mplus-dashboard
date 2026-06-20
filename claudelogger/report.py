@@ -742,7 +742,7 @@ _HTML = r"""<!doctype html>
   </div>
 
   <div class="tabpanel active" id="tab-briefing">
-  <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch</h2>
+  <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch <span id="route-link-top" style="text-transform:none;font-weight:400;font-size:13px"></span></h2>
   <div class="controls"><select id="fBrief"></select></div>
   <div id="briefing"></div>
   </div>
@@ -954,6 +954,10 @@ function renderBriefing(){
   };
   // ---- route stop/kick targets — lead the panel ----
   const rt=b.route;
+  // Surface the keystone route link at the top header too (per-dungeon; blank if none).
+  const _topLink=document.getElementById('route-link-top');
+  if(_topLink) _topLink.innerHTML = (rt && rt.code)
+    ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
   if(!rt){ box.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
     const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
