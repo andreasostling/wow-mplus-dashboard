@@ -509,7 +509,7 @@ def classify_fight(
                 meaningful[0], role, mob_meleed_tank, fixate_aura
             )
         needs_interrupt = sorted({c.source_name for c in meaningful if c.interruptible})
-        needs_stun = sorted({c.source_name for c in meaningful if c.stunnable and not c.interruptible})
+        needs_stun = sorted({c.source_name for c in meaningful if _stun_stoppable(c)})
 
         healer = _assess_healer(
             ts, win_start, trace, max_hp, one_shot, heals, healer_ids,
@@ -667,6 +667,26 @@ def _attribute(
     return out
 
 
+def _stun_stoppable(c: Contribution) -> bool:
+    """Would a stun on the source have stopped this contribution?
+
+    A stun interrupts a *cast in progress*; it does nothing about raw melee,
+    already-applied DoTs, or persistent zone/pool ticks you simply stand in
+    (those are a move/defensive problem, not a stun problem). So the stun lever
+    counts a contributor only when it's a discrete, non-periodic ability hit
+    from a stunnable, non-kickable source. (Mere MDT presence makes a mob
+    "stunnable"; without this gate every trash hit looked stun-preventable,
+    which made STUN a catch-all — see knowledge.is_source_stunnable.)
+    """
+    if not (c.stunnable and not c.interruptible):
+        return False
+    if c.periodic or c.is_ground:
+        return False
+    if c.ability_name.strip().lower() in ("melee", "", "physical"):
+        return False
+    return True
+
+
 def _decide_bucket(
     meaningful: list[Contribution], one_shot: bool, max_hp: int
 ) -> tuple[str, bool | None, float, list[str]]:
@@ -676,7 +696,7 @@ def _decide_bucket(
 
     # Sum the avoidable "lever" weight across meaningful contributors.
     pct_interrupt = sum(c.pct for c in meaningful if c.interruptible)
-    pct_stun = sum(c.pct for c in meaningful if c.stunnable and not c.interruptible)
+    pct_stun = sum(c.pct for c in meaningful if _stun_stoppable(c))
     pct_ground = sum(c.pct for c in meaningful if c.is_ground)
     pct_self = sum(c.pct for c in meaningful if c.is_self_or_friendly)
     distinct_mobs = {c.source_id for c in meaningful if not c.is_environment and not c.is_self_or_friendly}
@@ -690,7 +710,7 @@ def _decide_bucket(
     if best_weight >= 0.25:
         observed = any(
             (best_bucket == INTERRUPT and c.interruptible and c.interruptible_src == "observed")
-            or (best_bucket == STUN and c.stunnable and c.stunnable_src == "observed")
+            or (best_bucket == STUN and _stun_stoppable(c) and c.stunnable_src == "observed")
             or (best_bucket == GROUND and c.is_ground)
             for c in meaningful
         )
