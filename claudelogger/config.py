@@ -79,6 +79,19 @@ class Knobs:
     # under-used ("held"). Defensives get a separate, looser gate.
     cd_low_usage_frac: float = 0.6
     defensive_low_usage_frac: float = 0.5
+    # "Rarely uses defensives": a player is flagged when their total personal-defensive
+    # presses over a run fall below once per (this multiple × their FASTEST owned
+    # defensive's cooldown). Scaling to the shortest cooldown makes the bar kit-relative
+    # (a 15s Feint expects more presses than a 60s button) rather than a flat magic rate.
+    # 5× = "less than one press per five cooldowns of your most spammable mitigation" —
+    # genuine neglect, not role variance (the reference DPS/healer clear it with margin;
+    # tanks are excluded, their mitigation is graded in the active-mitigation block).
+    cd_def_rarely_cd_multiple: float = 5.0
+    # Per-defensive "ignored" check: only defensives at/below this cooldown are treated as
+    # regularly-usable (a rogue is meant to weave Feint, not hoard Ice Block). Above it —
+    # plus the Healthstone consumable — sitting unused is normal, so they're never flagged
+    # as ignored. The same cd_def_rarely_cd_multiple sets the per-defensive cadence floor.
+    cd_def_regular_max_cd_s: float = 60.0
     # "Missed uses" estimate (idle-ready time ÷ base CD, from actual cast timestamps)
     # is only meaningful for long "press-on-cooldown" burst CDs. Shorter CDs are
     # rotational / resource-gated (combo points, energy), where the cooldown isn't the

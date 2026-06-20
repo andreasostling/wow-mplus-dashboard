@@ -46,6 +46,7 @@ OFFENSIVE_CDS: dict[str, list[tuple[int, str, int]]] = {
 
 PURIFYING_BREW = 119582
 SHUFFLE_AURA = 215479
+HEALTHSTONE = 6262  # generic consumable — limited charges, not a weave-on-cooldown defensive
 
 
 def _class_token(sub_type: str) -> str:
@@ -185,16 +186,37 @@ def analyze_cd_economy(
         for c in casts:
             if c.get("abilityGameID") in PERSONAL_DEFENSIVES:
                 have_def.add(c["abilityGameID"])
-        def_rows = sorted(
-            ({"name": PERSONAL_DEFENSIVES[sid][0], "used": _count_casts(casts, sid)}
-             for sid in have_def),
-            key=lambda r: -r["used"],
-        )
+        # Per-defensive cadence. A "regularly-usable" defensive (short CD, not an emergency
+        # save or the Healthstone consumable) pressed far below once per (multiple × its CD)
+        # looks ignored — e.g. a rogue who never weaves Feint. Long-CD emergency buttons
+        # (Ice Block, Evasion) sitting unused is normal, so they're exempt; so are tanks
+        # (Brewmaster mitigation is graded in the active-mitigation block below).
+        def_rows = []
+        for sid in have_def:
+            name, cd_s, _mit, _school = PERSONAL_DEFENSIVES[sid]
+            used = _count_casts(casts, sid)
+            floor = combat_s / (knobs.cd_def_rarely_cd_multiple * cd_s) if cd_s > 0 and combat_s > 0 else 0.0
+            regular = (role != "tank" and sid != HEALTHSTONE
+                       and cd_s <= knobs.cd_def_regular_max_cd_s)
+            def_rows.append({"name": name, "used": used, "cd_s": int(cd_s),
+                             "floor": round(floor), "ignored": bool(regular and used < floor)})
+        def_rows.sort(key=lambda r: (not r["ignored"], -r["used"]))  # surface ignored ones first
+        # Run-wide "are they pressing mitigation at all?" backstop, distinct from a single
+        # ignored CD: flag if TOTAL presses fall below once per (multiple × their fastest
+        # owned defensive's cooldown). Only when the player owns defensives (so missing data
+        # never accuses) and isn't the tank.
+        def_total = sum(r["used"] for r in def_rows)
+        def_per_min = round(def_total / (combat_s / 60), 2) if combat_s > 0 else 0.0
+        min_cd = min((PERSONAL_DEFENSIVES[sid][1] for sid in have_def), default=0.0)
+        floor_uses = combat_s / (knobs.cd_def_rarely_cd_multiple * min_cd) if min_cd > 0 else 0.0
+        def_rarely = (role != "tank" and bool(have_def) and combat_s > 0
+                      and def_total < floor_uses)
 
         players.append({
             "name": actor.name, "class": actor.sub_type, "spec": spec, "role": role,
             "offensive": sorted(off_rows, key=lambda r: -r["used"]),
             "defensive": sorted(def_rows, key=lambda r: -r["used"]),
+            "def_total": def_total, "def_per_min": def_per_min, "def_rarely": def_rarely,
             "deaths_def_available_unused": def_unused.get(actor.name, 0),
             "deaths_def_would_save": def_would.get(actor.name, 0),
         })

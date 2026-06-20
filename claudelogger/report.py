@@ -1404,14 +1404,19 @@ render();
         const cdRows = (arr)=>arr.map(c=>{const [cls,txt,tip]=cdStatus(c);
           return `<tr><td>${esc(c.name)}</td><td>${c.seen?(c.used+'× · '+c.per_min+'/min'):'—'}</td>
           <td class="${cls}"${tip?` title="${tip}"`:''}>${txt}</td></tr>`;}).join('');
-        const defRows = (arr)=>arr.map(c=>`<tr><td>${esc(c.name)}</td><td>${c.used}×</td></tr>`).join('');
+        const defRows = (arr)=>arr.map(c=>{
+          const badge = c.ignored? ` <span class="low" title="pressed ${c.used}× — far below the ≈${c.floor} a ${c.cd_s}s defensive allows over this run; looks ignored">⚠ ${c.used?'rarely':'never'} pressed</span>`:'';
+          return `<tr><td>${esc(c.name)}${badge}</td><td class="${c.ignored?'low':''}">${c.used}×</td></tr>`;}).join('');
         let h = `<div><h4>${esc(p.name)} <span class="role">${esc(p.spec||p.class)} · ${esc(p.role)}</span></h4>`;
         if(p.offensive.length) h += `<table class="kv"><thead><tr><th>Offensive CD</th><th>cadence</th><th></th></tr></thead><tbody>${cdRows(p.offensive)}</tbody></table>`;
         if(p.defensive.length) h += `<table class="kv" style="margin-top:6px"><thead><tr><th>Defensive used</th><th>×</th></tr></thead><tbody>${defRows(p.defensive)}</tbody></table>`;
+        if(p.def_rarely) h += `<div class="contrib" style="margin-top:4px"><span class="low">⚠ rarely presses defensives</span> — ${p.def_total}× all run (${p.def_per_min}/min). Reactive mitigation is sitting on the bar; pressing it on dangerous casts eases the healer.</div>`;
         if(p.deaths_def_available_unused) h += `<div class="contrib" style="margin-top:4px"><span class="av-yes">${p.deaths_def_available_unused}</span> death(s) with a defensive up &amp; unused${p.deaths_def_would_save?` (${p.deaths_def_would_save} would have saved)`:''}.</div>`;
         grid.append(el(h+'</div>'));
       });
       box.append(grid);
+      if(ce.players.some(p=>(p.defensive||[]).some(c=>c.ignored)))
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> = a regularly-usable defensive (short cooldown, not an emergency button) pressed far below the cadence its cooldown allows over the run — it looks ignored (e.g. a rogue never weaving Feint). Long-CD emergency saves and the Healthstone consumable are exempt; tanks are graded by active mitigation instead.</div>'));
       if(ce.players.some(p=>(p.offensive||[]).some(c=>c.track_missed)))
         box.append(el('<div class="contrib" style="margin-top:6px"><b>≈ missed</b> = uses left on the table for long burst CDs, from actual cast timing: ready at the pull, locked for its base CD after each cast, the rest is idle-while-ready ÷ CD. Cooldowns recover between pulls, so it&#39;s wall-clock; downtime is counted, making it an opportunity ceiling, not strict waste. Hover for the idle breakdown.</div>'));
       const ex = ce.externals||{};
