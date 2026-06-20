@@ -989,7 +989,7 @@ function renderBriefing(){
     else{
       if((rt.kick_targets||[]).length){
         box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
-        const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const rtbl=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
         const rb=rtbl.querySelector('tbody');
         rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
           <td class="contrib">${renderSpells(kt.spell_pairs, kt.spells)}</td>
@@ -998,7 +998,7 @@ function renderBriefing(){
       }
       if((rt.stop_targets||[]).length){
         box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
-        const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const stbl=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
         const sb=stbl.querySelector('tbody');
         rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
           <td class="contrib">${renderSpells(st.spell_pairs, st.spells)}</td>
@@ -1035,12 +1035,12 @@ function renderBriefing(){
     const checked=new Set();           // role layers added on top (off by default)
     let interruptsOn=true;             // base layer: interrupt rows (on by default)
     const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show:</span></div>`);
-    const gtbl=el('<table><thead><tr><th>Ability</th><th>Mob</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
+    const gtbl=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
     const gb=gtbl.querySelector('tbody');
     const trs=[];
     sorted.forEach(a=>{
       const pills=labels(a.tags).map(L=>`<span class="pill b-other">${GTAG[L]||esc(L)}</span>`).join(' ');
-      const tr=el(`<tr><td>${spellLink(a.ability, a.spell_id)}</td><td class="muted">${esc(a.mob)}</td>
+      const tr=el(`<tr><td class="muted">${esc(a.mob)}</td><td>${spellLink(a.ability, a.spell_id)}</td>
         <td${a.note?` title="${esc(a.note)}"`:''}>${pills}</td></tr>`);
       tr._roles=rowRoles(a.tags);
       tr._isInterrupt=(a.tags||[]).includes('interrupt');
