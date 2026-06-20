@@ -710,7 +710,14 @@ _HTML = r"""<!doctype html>
   .bar.bar-wide{grid-template-columns:160px 1fr 104px}
   .bar .track{background:var(--bg);border:1px solid var(--line);border-radius:4px;height:12px;overflow:hidden}
   .bar .fill{display:block;height:100%;background:var(--accent);min-width:3px;border-radius:3px}
-  .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;align-items:center}
+  .hdr-btns{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .hdr-btns a{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:9px;
+    font-size:14px;font-weight:700;text-decoration:none;line-height:1;white-space:nowrap;
+    box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .hdr-btns a:hover{text-decoration:none;filter:brightness(1.12)}
+  .btn-route{background:var(--accent);color:#0b1220}
+  .btn-guide{background:var(--bad);color:#1a0606}
   select,input{background:var(--card);color:var(--ink);border:1px solid var(--line);
                border-radius:7px;padding:6px 8px}
   .contrib{color:var(--mut);font-size:12px}
@@ -755,8 +762,8 @@ _HTML = r"""<!doctype html>
   </div>
 
   <div class="tabpanel active" id="tab-briefing">
-  <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch <span id="route-link-top" style="text-transform:none;font-weight:400;font-size:13px"></span></h2>
-  <div class="controls"><select id="fBrief"></select></div>
+  <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch</h2>
+  <div class="controls"><select id="fBrief"></select><span id="route-link-top" class="hdr-btns"></span></div>
   <div id="briefing"></div>
   </div>
 
@@ -980,10 +987,10 @@ function renderBriefing(){
   // (per-dungeon; each blank if absent).
   const _topLink=document.getElementById('route-link-top');
   if(_topLink){
-    const _lp=[];
-    if(rt && rt.code) _lp.push(`<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>`);
-    if(b.boss_guide) _lp.push(`<a href="${esc(b.boss_guide)}" target="_blank" rel="noopener">▶ boss guide</a>`);
-    _topLink.innerHTML = _lp.join(' · ');
+    let _h='';
+    if(rt && rt.code) _h+=`<a class="btn-route" href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">🗺️ Open route ↗</a>`;
+    if(b.boss_guide) _h+=`<a class="btn-guide" href="${esc(b.boss_guide)}" target="_blank" rel="noopener">▶ Boss guide</a>`;
+    _topLink.innerHTML=_h;
   }
   if(!rt){ box.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
