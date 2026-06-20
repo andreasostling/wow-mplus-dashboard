@@ -511,31 +511,46 @@ def run_simc(
     adjusted = adjusted.replace("html=simc_output.html", f"html={html_path}")
     input_path.write_text(adjusted, encoding="utf-8")
 
-    cmd = [knobs.simc_binary, str(input_path)]
+    cmd_base = [knobs.simc_binary, str(input_path)]
     env = {**__import__("os").environ, "LC_ALL": "C"}
+    # Clear any stale JSON from a prior run so its existence means *this* run wrote it.
+    json_path.unlink(missing_ok=True)
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minute timeout
-            cwd=str(work_dir),
-            env=env,
-        )
-    except FileNotFoundError:
-        return {"error": f"simc binary not found at '{knobs.simc_binary}'. Install SimulationCraft or set CLAUDELOGGER_SIMC_BINARY."}
-    except subprocess.TimeoutExpired:
-        return {"error": "simc timed out after 10 minutes"}
+    # SimC's engine has a rare, RNG/thread-timing-dependent assertion ("non-channeling
+    # Action 'stealth' is trying to overwrite player-ready-event") that aborts the whole
+    # sim — seen on the Subtlety APL in DungeonRoute. It's transient: a re-run with a
+    # fresh seed almost always succeeds, so retry a couple of times before giving up.
+    TRANSIENT = ("overwrite player-ready-event",)
+    attempts = 3
+    for i in range(attempts):
+        # Vary the RNG seed on retries to dodge the exact iteration that tripped it.
+        cmd = cmd_base + ([f"seed={i + 1}"] if i else [])
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minute timeout
+                cwd=str(work_dir),
+                env=env,
+            )
+        except FileNotFoundError:
+            return {"error": f"simc binary not found at '{knobs.simc_binary}'. Install SimulationCraft or set CLAUDELOGGER_SIMC_BINARY."}
+        except subprocess.TimeoutExpired:
+            return {"error": "simc timed out after 10 minutes"}
 
-    if proc.returncode != 0:
+        if proc.returncode == 0:
+            break
+        stderr = proc.stderr or ""
         # Exit code 61 with locale error but JSON output = sim succeeded, HTML failed.
-        # Don't treat this as a fatal error.
-        if json_path.exists() and "locale" in (proc.stderr or ""):
-            pass  # fall through to JSON parsing
-        else:
-            stderr_tail = (proc.stderr or "")[-500:]
-            return {"error": f"simc exited with code {proc.returncode}: {stderr_tail}"}
+        if json_path.exists() and "locale" in stderr:
+            break
+        # Retry only the known transient engine race; deterministic errors won't improve.
+        if i + 1 < attempts and any(t in stderr for t in TRANSIENT):
+            json_path.unlink(missing_ok=True)
+            print(f"  simc: transient engine abort, retrying ({i + 2}/{attempts})…", file=sys.stderr)
+            continue
+        return {"error": f"simc exited with code {proc.returncode}: {stderr[-500:]}"}
 
     if not json_path.exists():
         return {"error": "simc ran but produced no JSON output"}
