@@ -15,6 +15,7 @@ from typing import Any
 
 import bisect
 
+from .combatlog import ROUTINE_SPAWNED_ADDS
 from .config import Knobs
 from .defensives import CLASS_BASELINE, EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, defensive_covers_school
 from .fetch import Actor, Fight, FightEvents, ReportData
@@ -516,9 +517,16 @@ def classify_fight(
         needs_interrupt = sorted({c.source_name for c in meaningful if c.interruptible})
         needs_stun = sorted({c.source_name for c in meaningful if _stun_stoppable(c)})
 
+        top_contrib = meaningful[0] if meaningful else None
+        # The death's bucket is the authoritative cause: INTERRUPT/STUN are the "stop"
+        # buckets and pass stricter gates than the raw [stun] lever (which over-tags via
+        # mere MDT presence). Also treat a genuinely-kickable dominant cast as stoppable.
+        lethal_stoppable = bucket in (INTERRUPT, STUN) or bool(top_contrib and top_contrib.interruptible)
+        is_env_death = d.get("killerID", 0) == ENVIRONMENT_ID
         healer = _assess_healer(
             ts, win_start, trace, max_hp, one_shot, heals, healer_ids,
-            healer_death_ts, healer_mana_series, healer_cc, knobs,
+            healer_death_ts, healer_mana_series, healer_cc,
+            lethal_stoppable, is_env_death, knobs,
         )
         pull_index = pull_index_for(pulls, ts)
         if bucket == INTERRUPT and pull_index in starved_pulls:
@@ -649,6 +657,12 @@ def _attribute(
         is_ground = is_env
         interruptible, i_src = kb.is_interruptible(ab)
         stunnable, s_src = kb.is_source_stunnable(game_id, ab)
+        # Summoned add-objects (Mana Battery, Smudge, …) detonate/overload — the counter is
+        # kill/avoid them, not stun (you can't stun an object). They're already excluded as
+        # route pulls; don't let the blanket "any MDT npc is stunnable" rule hang a [stun]
+        # lever on their damage. Matched by name (they carry multiple npc_ids).
+        if (src.name if src else "") in ROUTINE_SPAWNED_ADDS:
+            stunnable, s_src = False, "object"
         out.append(
             Contribution(
                 source_id=sid,
@@ -794,6 +808,8 @@ def _assess_healer(
     healer_death_ts: dict[int, int],
     mana_series: list[tuple[int, int, int]],
     cc_intervals: list[tuple[int, int, str]],
+    lethal_stoppable: bool,
+    is_env_death: bool,
     knobs: Knobs,
 ) -> HealerAssessment:
     if one_shot:
@@ -843,6 +859,23 @@ def _assess_healer(
         )
     if healing_low < 0.5 * max_hp:
         mana_txt = f"at {mana*100:.0f}% mana" if mana is not None else "mana unknown"
+        # Stop > heal: if the lethal cast was kickable/stunnable, or this was an
+        # environment/knockback death, it isn't "heal more" — the fix was the stop, not
+        # throughput. Mirrors the healer_cc'd carve-out above (see [[stop-taxonomy]]).
+        if is_env_death:
+            return HealerAssessment(
+                "stop_not_heal",
+                "Killed by the environment (knockback/fall) — not a healing problem; stop the "
+                "cast that displaced them.",
+                secs_low, healing_low, mana,
+            )
+        if lethal_stoppable:
+            return HealerAssessment(
+                "stop_not_heal",
+                f"Sat below {int(knobs.heal_more_hp_frac*100)}% for {secs_low:.1f}s, but the lethal cast was "
+                "kickable/stunnable — stop it rather than out-heal it (a stop problem, not 'heal more').",
+                secs_low, healing_low, mana,
+            )
         return HealerAssessment(
             "could_heal_more",
             f"Sat below {int(knobs.heal_more_hp_frac*100)}% for {secs_low:.1f}s with little healing received "

@@ -776,6 +776,12 @@ _HTML = r"""<!doctype html>
     <th data-k="bucket">Cause</th><th data-k="avoidable">Avoid?</th>
     <th data-k="confidence">Conf</th><th>Breakdown</th><th>Healer</th><th>Defensive</th>
   </tr></thead><tbody></tbody></table>
+  <div class="contrib" style="margin-top:6px"><b>Healer column</b> — was healing the lever?
+    <b>heal more</b> = victim sat low long enough to react with little healing received (healer alive, not CC’d, had mana);
+    <b>not on healer</b> = the lethal cast was kickable/stunnable, or a knockback/fall — fix the stop, not the healing;
+    <b>healer CC’d</b> / <b>healer OOM</b> = a CC or mana problem, not throughput;
+    <b>1-shot</b> = single hit from full HP, unreactable; <b>kept up</b> = dropped too fast to react, or got substantial healing.
+    Hover any cell for the specific detail.</div>
   </div>
 
   <div class="tabpanel" id="tab-dps">
@@ -1226,6 +1232,7 @@ function render(){
     const hv=d.healer.verdict;
     const healMap={could_heal_more:['heal more','av-yes'],"healer_cc'd":['healer CC’d','lever'],
                    healer_oom:['healer OOM','lever'],unhealable_oneshot:['1-shot','muted'],
+                   stop_not_heal:['not on healer','muted'],
                    kept_up:['kept up','muted'],unknown:['?','muted']};
     const hm=healMap[hv]||[hv,'muted'];
     const heal=`<span class="${hm[1]}" title="${esc(d.healer.detail||'')}">${esc(hm[0])}</span>`;
