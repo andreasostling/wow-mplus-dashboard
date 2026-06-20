@@ -4,6 +4,10 @@ Guidance for working in this repo. ClaudeLogger analyzes a fixed M+ 5-stack's de
 from Warcraft Logs and produces a JSON + self-contained HTML dashboard + per-dungeon
 pre-run briefings. **Read [README.md](README.md) for the user-facing feature list.**
 
+**Task queue: [docs/tasks/](docs/tasks/)** — one self-contained `*.md` file per queued task
+for a fresh session to pick up. Read [docs/tasks/README.md](docs/tasks/README.md) for the
+convention; **delete a task file when its work is done** (same commit as the change).
+
 ## Conventions (important)
 
 - **Python 3.11+.** The interpreter is `python3` (there is no `python` on PATH); run
