@@ -72,6 +72,10 @@ class Contribution:
                 "interruptible_evidence": self.interruptible_src,
                 "stunnable": self.stunnable,
                 "stunnable_evidence": self.stunnable_src,
+                # Gated "a stun would actually stop this" — excludes melee/periodic/ground and
+                # kickable casts (same gate the STUN bucket uses). The death-log [stun] badge
+                # renders from this, not the raw stunnable flag, so melee no longer shows [stun].
+                "stun_stoppable": _stun_stoppable(self),
                 "ground_effect": self.is_ground,
             },
         }

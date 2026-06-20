@@ -695,6 +695,7 @@ _HTML = r"""<!doctype html>
   .av-yes{color:var(--bad);font-weight:700} .av-no{color:var(--ok)} .av-null{color:var(--mut)}
   .bars{display:flex;flex-direction:column;gap:3px}
   .bar{display:grid;grid-template-columns:170px 1fr 44px;gap:8px;align-items:center;font-size:12px}
+  .bar.bar-wide{grid-template-columns:160px 1fr 104px}
   .bar .track{background:var(--bg);border:1px solid var(--line);border-radius:4px;height:12px;overflow:hidden}
   .bar .fill{display:block;height:100%;background:var(--accent);min-width:3px;border-radius:3px}
   .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
@@ -996,8 +997,8 @@ function renderBriefing(){
   if((b.leaked_casts||[]).length){
     box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority — interrupt highest first <span class="muted" style="font-weight:normal">· by damage per leaked cast</span></h3>'));
     const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
-    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
-      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span>${Math.round((dmg||0)/1000)}k/cast <span class="muted">×${n}</span></span></div>`)));
+    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar bar-wide"><span>${esc(sp)}</span>
+      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span style="white-space:nowrap"><span class="muted">×${n}</span> ${Math.round((dmg||0)/1000)}k/cast</span></div>`)));
   }
   if((b.dangerous_casts||[]).length){
     const allDanger=b.dangerous_casts;
@@ -1223,7 +1224,7 @@ function render(){
   r.forEach(d=>{
     const [lbl,cls]=bucketLabel[d.bucket]||[d.bucket,'b-other'];
     const contrib=d.contributions.map(c=>{
-      const lev=[]; if(c.levers.interruptible)lev.push('kick'); if(c.levers.stunnable)lev.push('stun');
+      const lev=[]; if(c.levers.interruptible)lev.push('kick'); if(c.levers.stun_stoppable)lev.push('stun');
       if(c.levers.ground_effect)lev.push('ground');
       return `${Math.round(c.pct*100)}% ${esc(c.ability)} <span class="muted">(${esc(c.source)})</span>`+
         (lev.length?` <span class="lever">[${lev.join('/')}]</span>`:'');}).join('<br>');
