@@ -16,7 +16,7 @@ from typing import Any
 import bisect
 
 from .config import Knobs
-from .defensives import CLASS_BASELINE, EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES
+from .defensives import CLASS_BASELINE, EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, defensive_covers_school
 from .fetch import Actor, Fight, FightEvents, ReportData
 from .knowledge import AbilityKnowledge, COMP_CC_SEED, STUN_LIKE_KINDS, is_fixate, is_hard_cc
 from .pulls import Pull, pull_cc_tally, pull_index_for, segment_pulls
@@ -357,13 +357,16 @@ def _assess_defensives(
     kb_amount: int,
     overkill: int,
     big_predictable: bool,
+    kb_school: int = 0,
 ) -> DefensiveAssessment:
     """Did the victim (or a teammate) have a defensive off cooldown that would have
     covered the lethal margin? Conservative: counts class-baseline defensives plus
     anything actually cast in the fight. 'Would have saved' is only ever claimed when the
     death was a big, predictable hit (see _is_big_predictable) AND the defensive's
-    mitigation covers the lethal margin (mitigation * killing_blow > overkill) — so it
-    means "you should have pre-pressed for this", not merely "you had a CD up when you died".
+    mitigation covers the lethal margin (mitigation * killing_blow > overkill) AND the
+    defensive's school actually applies to the killing blow (kb_school) — so a Rogue isn't
+    told Cloak/Evasion would have saved a blow of the wrong school. It means "you should
+    have pre-pressed for this", not merely "you had a CD up when you died".
     """
     own = casts_by_source.get(victim.id, [])
     # Defensives we can prove the victim has: baseline-for-class + cast-in-fight.
@@ -374,7 +377,7 @@ def _assess_defensives(
 
     available, active, would_save = [], [], []
     for sid in have:
-        name, cd_s, mit = PERSONAL_DEFENSIVES[sid]
+        name, cd_s, mit, school = PERSONAL_DEFENSIVES[sid]
         casts_before = [c["timestamp"] for c in own if c.get("abilityGameID") == sid and c["timestamp"] <= death_ts]
         last = max(casts_before) if casts_before else None
         # Active if cast within ~the shorter of (cd, 12s) before death.
@@ -385,7 +388,8 @@ def _assess_defensives(
         if on_cd:
             continue
         available.append(name)
-        if big_predictable and kb_amount > 0 and mit * kb_amount > overkill:
+        if (big_predictable and kb_amount > 0 and mit * kb_amount > overkill
+                and defensive_covers_school(school, kb_school)):
             would_save.append(name)
 
     # Teammate externals off cooldown that landed on (or could have) the victim.
@@ -393,13 +397,14 @@ def _assess_defensives(
     for src_id, casts in casts_by_source.items():
         if src_id == victim.id:
             continue
-        for sid, (name, cd_s, mit) in EXTERNAL_DEFENSIVES.items():
+        for sid, (name, cd_s, mit, school) in EXTERNAL_DEFENSIVES.items():
             ext_casts = [c["timestamp"] for c in casts if c.get("abilityGameID") == sid and c["timestamp"] <= death_ts]
             if not ext_casts:
                 continue
             if (death_ts - max(ext_casts)) >= cd_s * 1000:
                 externals.append(name)
-                if big_predictable and kb_amount > 0 and mit * kb_amount > overkill and name not in would_save:
+                if (big_predictable and kb_amount > 0 and mit * kb_amount > overkill
+                        and defensive_covers_school(school, kb_school) and name not in would_save):
                     would_save.append(f"{name} (external)")
     return DefensiveAssessment(
         available=sorted(set(available)),
@@ -520,7 +525,8 @@ def classify_fight(
             confidence = min(0.97, confidence + 0.1)
             notes.append("This pull was CC-starved (more interruptible casts leaked than the comp had kicks/stuns for).")
         big_predictable = _is_big_predictable(meaningful[0] if meaningful else None, max_hp, knobs)
-        defensives = _assess_defensives(ts, target, casts_by_source, kb_amount, overkill, big_predictable)
+        kb_school = rep.ability_school(d.get("killingAbilityGameID", 0))
+        defensives = _assess_defensives(ts, target, casts_by_source, kb_amount, overkill, big_predictable, kb_school)
         if defensives.would_have_saved:
             notes.append("Big, predictable hit ("
                          + meaningful[0].ability_name + ") — pre-empt with a defensive; one was off cooldown that "
