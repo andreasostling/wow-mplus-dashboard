@@ -555,39 +555,64 @@ render();
       box.append(el('<div class="contrib" style="margin-top:6px">Boss combat time: '+t.boss_times.map(b=>`${esc(b.name)} ${fmtMin(b.duration_s)}${b.segments>1?` <span class="muted">(${b.segments} phases)</span>`:''}`).join(' · ')+'</div>'));
     box.append(el(`<div class="contrib" style="margin-top:4px">${esc(t.forces_note||'')}</div>`));
 
-    // B: DPS actual vs ceiling
+    // B: DPS — two views, each with its own benchmark and scale:
+    //    B1 = run-DPS vs the real +kl field (typical = 90th-percentile logger)
+    //    B2 = run-DPS vs your own SimC ceiling (gear-fair target)
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
-      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs SimC ceiling vs top +12</h3>'));
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
-      let scaleMax = 1; names.forEach(n=>{ const s=sims[n]||{}; scaleMax=Math.max(scaleMax, dps[n].run_dps, s.dps||0, s.top12_typical||0); });
-      let anyTop=false;
-      names.sort((a,b)=>dps[b].run_dps-dps[a].run_dps).forEach(n=>{
-        const a = dps[n], s = sims[n]||{}, ceil = s.dps||0, top = s.top12_typical||0;
-        const kl = s.top12_key||12; if(top>0) anyTop=true;
-        const roleTag = a.role==='tank'?' 🛡️':a.role==='healer'?' 💚':'';
-        // Headline % = run-DPS as a fraction of the typical (90th-percentile) +kl logger.
-        const pct = top>0? Math.round(100*a.run_dps/top) : null;
-        const actK = Math.round(a.run_dps/1000);
-        // Typical (the % denominator) + sim ceiling shown as muted context.
-        const refTxt = top>0
-          ? ` <span class="muted">(typical +${kl} ${Math.round(top/1000)}k${ceil>0?` · ${Math.round(ceil/1000)}k sim`:''})</span>`
-          : (ceil>0? ` <span class="muted">(${Math.round(ceil/1000)}k sim)</span>` : '');
-        // If the sim sits above the real +12 field, the ceiling itself is suspect (sim runs hot).
-        const rmTxt = s.sim_realism==='optimistic'
-          ? ` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — the ceiling is likely optimistic for this spec, so don't read the gap as pure execution">⚠ sim hot</span>` : '';
-        const gapTxt = pct!==null
-          ? `<span class="${pct<70?'low':pct<90?'lever':'ok-use'}">${actK}k · ${pct}% of typical</span>${refTxt}${rmTxt}`
-          : `${actK}k${refTxt}`;
-        const ceilW = haveSim&&ceil>0? Math.round(100*ceil/scaleMax):0; const actW = Math.round(100*a.run_dps/scaleMax);
-        const topW = top>0? Math.round(100*top/scaleMax):0;
-        const topMark = top>0? `<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>` : '';
-        box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag}</span>
-          <span class="track">${haveSim&&ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span>${topMark}</span>
-          <span class="muted" style="font-size:12px">${gapTxt}</span></div>`));
-      });
-      if(!haveSim) box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+12 benchmark, and the gap%.</div>'));
-      else if(anyTop) box.append(el('<div class="contrib"><span style="color:#e0a040">▎</span> = typical +12 logger (90th-percentile DPS, WCL) for that spec — the denominator of the % shown. The SimC ceiling already reflects <em>your</em> gear, so it&#39;s the gear-fair target; both are real-player context.</div>'));
+      const ordered = names.slice().sort((a,b)=>dps[b].run_dps-dps[a].run_dps);
+      const roleTag = n => dps[n].role==='tank'?' 🛡️':dps[n].role==='healer'?' 💚':'';
+      const kl = (sims[ordered[0]]||{}).top12_key||12;
+      const actTitle = a => `actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS`;
+      const pctClass = p => p<70?'low':p<90?'lever':'ok-use';
+      if(!haveSim){
+        box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS</h3>'));
+        box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+'+kl+' benchmark, and the gap%.</div>'));
+      } else {
+        // B1 — actual vs the typical (90th-percentile) +kl logger for each spec.
+        const anyTop = ordered.some(n=>(sims[n]||{}).top12_typical>0);
+        if(anyTop){
+          box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl}</h3>`));
+          let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).top12_typical||0); });
+          ordered.forEach(n=>{
+            const a=dps[n], top=(sims[n]||{}).top12_typical||0;
+            const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0;
+            const pct=top>0?Math.round(100*a.run_dps/top):null;
+            const txt = pct!==null
+              ? `<span class="${pctClass(pct)}">${Math.round(a.run_dps/1000)}k · ${pct}% of typical</span>`
+              : `${Math.round(a.run_dps/1000)}k`;
+            const mark = top>0?`<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
+            box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
+              <span class="track"><span class="act" style="width:${actW}%" title="${actTitle(a)}"></span>${mark}</span>
+              <span class="muted" style="font-size:12px">${txt}</span></div>`));
+          });
+          box.append(el(`<div class="contrib"><span style="color:#e0a040">▎</span> = typical +${kl} logger (90th-percentile run-DPS, WCL) for that spec — the % denominator. Real-player context, not your gear.</div>`));
+        }
+        // B2 — actual vs your own SimC ceiling. Sim-hot specs get a ⚠ flag explained below.
+        const anyCeil = ordered.some(n=>(sims[n]||{}).dps>0);
+        if(anyCeil){
+          box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs your SimC ceiling</h3>'));
+          let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).dps||0); });
+          let anyHot=false;
+          ordered.forEach(n=>{
+            const a=dps[n], s=sims[n]||{}, ceil=s.dps||0;
+            const actW=Math.round(100*a.run_dps/mx), ceilW=ceil>0?Math.round(100*ceil/mx):0;
+            const pct=ceil>0?Math.round(100*a.run_dps/ceil):null;
+            const hot = s.sim_realism==='optimistic'; if(hot) anyHot=true;
+            const hotMark = hot?` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — ceiling likely optimistic">⚠</span>`:'';
+            const txt = pct!==null
+              ? `<span class="${pctClass(pct)}">${Math.round(a.run_dps/1000)}k · ${pct}% of ceiling</span>${hotMark}`
+              : `${Math.round(a.run_dps/1000)}k${hotMark}`;
+            box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
+              <span class="track">${ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span></span>
+              <span class="muted" style="font-size:12px">${txt}</span></div>`));
+          });
+          let cap = '<span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear — the gear-fair target.';
+          if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
+          box.append(el('<div class="contrib">'+cap+'</div>'));
+        }
+      }
     }
 
     // C: cooldown economy
