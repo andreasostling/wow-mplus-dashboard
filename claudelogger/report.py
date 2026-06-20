@@ -918,11 +918,13 @@ function renderBriefing(){
     const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
     const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
     topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
-    // Role filter — toggle which roles' mechanics are shown (all on by default).
-    // Interrupts-only filter — restrict to interrupt mechanics (on by default).
-    const checked=new Set(['tank','healer','dps']);
-    let interruptsOnly=true;
-    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show for:</span></div>`);
+    // Additive layer filter — interrupts are the default base layer; each role
+    // toggle *adds* its mechanics on top. A row is visible if it's an interrupt
+    // (when that layer is on) OR it belongs to an enabled role. All toggles are
+    // independent: nothing is restrictive.
+    const checked=new Set();           // role layers added on top (off by default)
+    let interruptsOn=true;             // base layer: interrupt rows (on by default)
+    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show:</span></div>`);
     const gtbl=el('<table><thead><tr><th>Ability</th><th>Mob</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
     const gb=gtbl.querySelector('tbody');
     const trs=[];
@@ -935,19 +937,19 @@ function renderBriefing(){
       gb.append(tr); trs.push(tr);
     });
     const apply=()=>{let shown=0;trs.forEach(tr=>{
-      const vis=[...tr._roles].some(r=>checked.has(r)) && (!interruptsOnly || tr._isInterrupt);
+      const vis=(interruptsOn && tr._isInterrupt) || [...tr._roles].some(r=>checked.has(r));
       tr.style.display=vis?'':'none';if(vis)shown++;});
       empty.style.display=shown?'none':'';};
+    const iwrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox" checked> 🛑 Interrupts</label>`);
+    iwrap.querySelector('input').addEventListener('change',e=>{interruptsOn=e.target.checked;apply();});
+    ctrl.append(iwrap);
     [['tank','🛡️ Tank'],['healer','💚 Healer'],['dps','⚔️ DPS']].forEach(([key,lab])=>{
-      const wrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox" checked> ${lab}</label>`);
+      const wrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox"> + ${lab}</label>`);
       wrap.querySelector('input').addEventListener('change',e=>{e.target.checked?checked.add(key):checked.delete(key);apply();});
       ctrl.append(wrap);
     });
-    const iwrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center;border-left:1px solid #444;padding-left:14px"><input type="checkbox" checked> 🛑 Interrupts only</label>`);
-    iwrap.querySelector('input').addEventListener('change',e=>{interruptsOnly=e.target.checked;apply();});
-    ctrl.append(iwrap);
     topBox.append(ctrl); topBox.append(gtbl);
-    const empty=el(`<div class="muted" style="font-size:11px;display:none">No abilities for the selected role(s).</div>`);
+    const empty=el(`<div class="muted" style="font-size:11px;display:none">Nothing selected — tick a layer above to show mechanics.</div>`);
     topBox.append(empty);
     apply();
   }
