@@ -228,6 +228,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         threats.sort(key=lambda x: (-x["deaths"], -x["avg_pct"]))
 
         leaked: Counter = Counter()
+        leaked_dmg: Counter = Counter()
         starved = pulls = 0
         for r in drs:
             for p in r.get("pulls", []):
@@ -235,6 +236,13 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
                 starved += 1 if p.get("cc_starved") else 0
                 for sp, n in (p.get("leaked_by_spell") or {}).items():
                     leaked[sp] += n
+                for sp, d in (p.get("leaked_dmg_by_spell") or {}).items():
+                    leaked_dmg[sp] += d
+        # (spell, leak_count, damage-per-cast) — sorted by how hard one cast hits.
+        leaked_ranked = sorted(
+            ((sp, n, round(leaked_dmg[sp] / n) if n else 0) for sp, n in leaked.items()),
+            key=lambda t: -t[2],
+        )[:12]
 
         # Start from the comp's spec-based toolkit (what we *can* bring), then fold in
         # anything actually cast in these runs (covers off-kit/seed gaps).
@@ -282,7 +290,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
             "wipes": wipes,
             "threats": threats,
             "peel_mobs": peel.most_common(8),
-            "leaked_casts": leaked.most_common(12),
+            "leaked_casts": leaked_ranked,
             "cc_starved_pulls": starved,
             "pulls": pulls,
             "players_dying": Counter(d["player"] for d in deaths).most_common(),
@@ -491,8 +499,8 @@ def briefing_to_markdown(b: dict) -> str:
         L += [f"- **{m}** — clipped a non-tank {n}×" for m, n in b["peel_mobs"]]
 
     if b["leaked_casts"]:
-        L += ["", "## 🎯 Kick priority (interruptible casts that leaked most)", ""]
-        L += [f"- **{sp}** ×{n}" for sp, n in b["leaked_casts"]]
+        L += ["", "## 🎯 Kick priority (by damage per leaked cast)", ""]
+        L += [f"- **{sp}** — ≈{dmg:,} dmg/cast (leaked ×{n})" for sp, n, dmg in b["leaked_casts"]]
     L += ["", "## 💀 Who dies here", "",
           ", ".join(f"{p} ({n})" for p, n in b["players_dying"]) or "—"]
     L += ["", "## 🧰 Your CC & pacing", "",
@@ -986,10 +994,10 @@ function renderBriefing(){
       <span class="track"><span class="fill" style="width:${100*n/pmx}%"></span></span><span>${n}</span></div>`)));
   }
   if((b.leaked_casts||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority (casts that leaked most)</h3>'));
-    const mx=Math.max(...b.leaked_casts.map(a=>a[1]));
-    b.leaked_casts.forEach(([sp,n])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
-      <span class="track"><span class="fill" style="width:${100*n/mx}%"></span></span><span>${n}</span></div>`)));
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority (by damage per leaked cast)</h3>'));
+    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
+    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
+      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span>${Math.round((dmg||0)/1000)}k/cast <span class="muted">×${n}</span></span></div>`)));
   }
   // who dies here
   if((b.players_dying||[]).length){

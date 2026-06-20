@@ -106,6 +106,7 @@ def pull_cc_tally(pull: Pull, fe: FightEvents, rep: ReportData, kb: AbilityKnowl
 
     leaked_keys: set[tuple] = set()
     leaked_by_spell: dict[int, int] = {}
+    leaked_dmg_by_key: dict[tuple, float] = {}  # total damage per leaked cast (AoE ticks summed)
     for ev in fe.of("DamageTaken"):
         if not in_pull(ev):
             continue
@@ -117,10 +118,15 @@ def pull_cc_tally(pull: Pull, fe: FightEvents, rep: ReportData, kb: AbilityKnowl
             continue
         bucket = ev["timestamp"] // 1500  # collapse AoE/DoT ticks of a single cast
         key = (ab, ev.get("sourceID", 0), ev.get("sourceInstance", 0), bucket)
+        leaked_dmg_by_key[key] = leaked_dmg_by_key.get(key, 0) + (ev.get("amount", 0) or 0) + (ev.get("absorbed", 0) or 0)
         if key not in leaked_keys:
             leaked_keys.add(key)
             leaked_by_spell[ab] = leaked_by_spell.get(ab, 0) + 1
     interrupts_leaked = len(leaked_keys)
+    # Total leaked damage per ability (sum over its casts), keyed by ability id.
+    leaked_dmg_by_ab: dict[int, float] = {}
+    for (ab, *_), dmg in leaked_dmg_by_key.items():
+        leaked_dmg_by_ab[ab] = leaked_dmg_by_ab.get(ab, 0) + dmg
 
     # comp interrupt/stun CC actually used in the pull
     comp_interrupts = comp_stuns = 0
@@ -159,6 +165,7 @@ def pull_cc_tally(pull: Pull, fe: FightEvents, rep: ReportData, kb: AbilityKnowl
         "interrupts_kicked": interrupts_kicked,
         "interrupts_leaked": interrupts_leaked,
         "leaked_by_spell": {rep.ability_name(k): v for k, v in sorted(leaked_by_spell.items(), key=lambda kv: -kv[1])},
+        "leaked_dmg_by_spell": {rep.ability_name(k): v for k, v in leaked_dmg_by_ab.items()},
         "comp_interrupts_used": comp_interrupts,
         "comp_stuns_used": comp_stuns,
         "comp_cc_used": comp_cc_used,
