@@ -174,6 +174,12 @@ class SimcKnobs:
     # keystone.guru exports each enemy's HP at a fixed percentage (one player's
     # damage share). We exported at 25%, so real total HP = sum(route HP) / this.
     route_export_share: float = 0.25
+    # The tank sims against a flat fraction of full pull HP (not its tiny DPS-proportional
+    # slice, which collapses AoE uptime, nor the full 100%, which over-stacks pulls and
+    # inflates AoE target counts). 25% keeps fights long enough for stable AoE without
+    # unrealistic stacking. Only its DPS *rate* feeds the timer, so this is a realism knob
+    # for the tank's measured output, not a change to the clear-time math.
+    tank_health_share: float = 0.25
     # Per-player share = that player's true fraction of group DPS (shares sum to
     # ~100%). Leave at 1.0; padding it doesn't reach the timer (DPS is a rate, so
     # more HP just lengthens the sim at ~same DPS) and makes shares exceed 100%.

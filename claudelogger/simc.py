@@ -635,11 +635,11 @@ def run_dungeon_sims(
     export_share = max(cfg.simc.route_export_share, 1e-6)
 
     def health_factor(profile: PlayerProfile) -> float:
-        # The tank fights the full pack, not a DPS-proportional slice — scaling its
-        # enemies down to ~10% HP collapses AoE uptime and makes damage-done swing
-        # by dungeon. Restore the route's exported HP to full pull HP.
+        # The tank sims against a flat tank_health_share of full pull HP, not a tiny
+        # DPS-proportional slice (which collapses AoE uptime) nor the full pull (which
+        # over-stacks pulls and inflates AoE). Only its DPS rate feeds the timer.
         if profile.role == "tank":
-            return 1.0 / export_share
+            return cfg.simc.tank_health_share / export_share
         if dps_by_player and total_dps > 0:
             pdps = dps_by_player.get(profile.name, 0.0)
             if pdps > 0:
