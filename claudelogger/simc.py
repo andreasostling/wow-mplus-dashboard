@@ -581,10 +581,17 @@ def run_dungeon_sims(
 ) -> list[SimcResult]:
     """Run simc for each player profile against a dungeon route.
 
-    If dps_by_player (player name → DPS from a prior sim) is given, each player's
-    route HP is rescaled so they fight their realistic share of the pull
+    If dps_by_player (player name → DPS from a prior sim) is given, each DPS/heal
+    player's route HP is rescaled so they fight their realistic share of the pull
     (share_i = dps_i / group_dps, padded by knobs.share_pad), instead of the flat
-    export share. The tank ends up with a smaller share than the DPS.
+    export share.
+
+    The tank is the exception: it tanks the *whole* pack, so a DPS-proportional
+    slice (~10% HP) would collapse AoE uptime — too few targets alive for too short
+    a time — and make its AoE damage-done swing wildly by dungeon. Tanks instead
+    fight the full pull HP (factor = 1/export_share), which keeps AoE uptime
+    realistic and the damage-done number consistent. (Tank survivability metrics
+    — dtps/tmi — are out of scope here and intentionally not modelled.)
 
     Returns a list of SimcResult objects (one per player that simmed successfully).
     """
@@ -601,9 +608,14 @@ def run_dungeon_sims(
     total_dps = sum((dps_by_player or {}).get(p.name, 0.0) for p in profiles)
     export_share = max(cfg.simc.route_export_share, 1e-6)
 
-    def health_factor(name: str) -> float:
+    def health_factor(profile: PlayerProfile) -> float:
+        # The tank fights the full pack, not a DPS-proportional slice — scaling its
+        # enemies down to ~10% HP collapses AoE uptime and makes damage-done swing
+        # by dungeon. Restore the route's exported HP to full pull HP.
+        if profile.role == "tank":
+            return 1.0 / export_share
         if dps_by_player and total_dps > 0:
-            pdps = dps_by_player.get(name, 0.0)
+            pdps = dps_by_player.get(profile.name, 0.0)
             if pdps > 0:
                 share = pdps / total_dps
                 return share * cfg.simc.share_pad / export_share
@@ -633,7 +645,7 @@ def run_dungeon_sims(
                   file=sys.stderr)
             continue
 
-        factor = health_factor(profile.name)
+        factor = health_factor(profile)
         use_route = scale_route_health(route_text, factor)
 
         print(f"  simc: simming {profile.name} ({profile.spec} {profile.simc_class}) in {dungeon} "
