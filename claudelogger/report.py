@@ -229,6 +229,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         threats.sort(key=lambda x: (-x["deaths"], -x["avg_pct"]))
 
         leaked: Counter = Counter()
+        leaked_dmg: Counter = Counter()
         starved = pulls = 0
         for r in drs:
             for p in r.get("pulls", []):
@@ -236,6 +237,13 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
                 starved += 1 if p.get("cc_starved") else 0
                 for sp, n in (p.get("leaked_by_spell") or {}).items():
                     leaked[sp] += n
+                for sp, d in (p.get("leaked_dmg_by_spell") or {}).items():
+                    leaked_dmg[sp] += d
+        # (spell, leak_count, damage-per-cast) — sorted by how hard one cast hits.
+        leaked_ranked = sorted(
+            ((sp, n, round(leaked_dmg[sp] / n) if n else 0) for sp, n in leaked.items()),
+            key=lambda t: -t[2],
+        )[:12]
 
         # Start from the comp's spec-based toolkit (what we *can* bring), then fold in
         # anything actually cast in these runs (covers off-kit/seed gaps).
@@ -283,7 +291,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
             "wipes": wipes,
             "threats": threats,
             "peel_mobs": peel.most_common(8),
-            "leaked_casts": leaked.most_common(12),
+            "leaked_casts": leaked_ranked,
             "cc_starved_pulls": starved,
             "pulls": pulls,
             "players_dying": Counter(d["player"] for d in deaths).most_common(),
@@ -586,8 +594,8 @@ def briefing_to_markdown(b: dict) -> str:
         L += [f"- **{m}** — clipped a non-tank {n}×" for m, n in b["peel_mobs"]]
 
     if b["leaked_casts"]:
-        L += ["", "## 🎯 Kick priority (interruptible casts that leaked most)", ""]
-        L += [f"- **{sp}** ×{n}" for sp, n in b["leaked_casts"]]
+        L += ["", "## 🎯 Kick priority (by damage per leaked cast)", ""]
+        L += [f"- **{sp}** — ≈{dmg:,} dmg/cast (leaked ×{n})" for sp, n, dmg in b["leaked_casts"]]
     L += ["", "## 💀 Who dies here", "",
           ", ".join(f"{p} ({n})" for p, n in b["players_dying"]) or "—"]
     L += ["", "## 🧰 Your CC & pacing", "",
@@ -658,7 +666,7 @@ def write_html_artifact(out_dir: Path, season: dict, runs: list[dict], briefings
 _HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClaudeLogger — M+ Death Analysis</title>
+<title>ClaudeLogger — M+ Analysis</title>
 <style>
   :root{--bg:#0f1115;--card:#171a21;--ink:#e7e9ee;--mut:#9aa3b2;--line:#262b36;
         --bad:#ff5d5d;--ok:#46d39a;--warn:#ffb454;--accent:#6aa3ff;}
@@ -722,7 +730,7 @@ _HTML = r"""<!doctype html>
   .tabpanel{display:none} .tabpanel.active{display:block}
 </style></head>
 <body><div class="wrap">
-  <h1>ClaudeLogger — Mythic+ Death Analysis</h1>
+  <h1>ClaudeLogger — Mythic+ Analysis</h1>
   <p class="sub" id="sub"></p>
 
   <h2 style="margin-top:14px">🗺️ Before the key — route &amp; what to stop/kick</h2>
@@ -1029,10 +1037,14 @@ function renderBriefing(){
       return s.size?s:new Set(['tank','healer','dps']);};
     const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
     const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
-    topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 What the guides flag <span class="muted" style="font-weight:normal">· Method.gg</span>${src}</h3>`));
-    // Role filter — toggle which roles' mechanics are shown (all on by default).
-    const checked=new Set(['tank','healer','dps']);
-    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show for:</span></div>`);
+    topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
+    // Additive layer filter — interrupts are the default base layer; each role
+    // toggle *adds* its mechanics on top. A row is visible if it's an interrupt
+    // (when that layer is on) OR it belongs to an enabled role. All toggles are
+    // independent: nothing is restrictive.
+    const checked=new Set();           // role layers added on top (off by default)
+    let interruptsOn=true;             // base layer: interrupt rows (on by default)
+    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show:</span></div>`);
     const gtbl=el('<table><thead><tr><th>Ability</th><th>Mob</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
     const gb=gtbl.querySelector('tbody');
     const trs=[];
@@ -1041,18 +1053,23 @@ function renderBriefing(){
       const tr=el(`<tr><td>${spellLink(a.ability, a.spell_id)}</td><td class="muted">${esc(a.mob)}</td>
         <td${a.note?` title="${esc(a.note)}"`:''}>${pills}</td></tr>`);
       tr._roles=rowRoles(a.tags);
+      tr._isInterrupt=(a.tags||[]).includes('interrupt');
       gb.append(tr); trs.push(tr);
     });
-    const apply=()=>{let shown=0;trs.forEach(tr=>{const vis=[...tr._roles].some(r=>checked.has(r));
+    const apply=()=>{let shown=0;trs.forEach(tr=>{
+      const vis=(interruptsOn && tr._isInterrupt) || [...tr._roles].some(r=>checked.has(r));
       tr.style.display=vis?'':'none';if(vis)shown++;});
       empty.style.display=shown?'none':'';};
+    const iwrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox" checked> 🛑 Interrupts</label>`);
+    iwrap.querySelector('input').addEventListener('change',e=>{interruptsOn=e.target.checked;apply();});
+    ctrl.append(iwrap);
     [['tank','🛡️ Tank'],['healer','💚 Healer'],['dps','⚔️ DPS']].forEach(([key,lab])=>{
-      const wrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox" checked> ${lab}</label>`);
+      const wrap=el(`<label style="cursor:pointer;display:inline-flex;gap:4px;align-items:center"><input type="checkbox"> + ${lab}</label>`);
       wrap.querySelector('input').addEventListener('change',e=>{e.target.checked?checked.add(key):checked.delete(key);apply();});
       ctrl.append(wrap);
     });
     topBox.append(ctrl); topBox.append(gtbl);
-    const empty=el(`<div class="muted" style="font-size:11px;display:none">No abilities for the selected role(s).</div>`);
+    const empty=el(`<div class="muted" style="font-size:11px;display:none">Nothing selected — tick a layer above to show mechanics.</div>`);
     topBox.append(empty);
     apply();
   }
@@ -1108,10 +1125,10 @@ function renderBriefing(){
       <span class="track"><span class="fill" style="width:${100*n/pmx}%"></span></span><span>${n}</span></div>`)));
   }
   if((b.leaked_casts||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority (casts that leaked most)</h3>'));
-    const mx=Math.max(...b.leaked_casts.map(a=>a[1]));
-    b.leaked_casts.forEach(([sp,n])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
-      <span class="track"><span class="fill" style="width:${100*n/mx}%"></span></span><span>${n}</span></div>`)));
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority (by damage per leaked cast)</h3>'));
+    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
+    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
+      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span>${Math.round((dmg||0)/1000)}k/cast <span class="muted">×${n}</span></span></div>`)));
   }
   // who dies here
   if((b.players_dying||[]).length){
@@ -1265,8 +1282,9 @@ render();
         const anyTop = ordered.some(n=>(sims[n]||{}).top12_typical>0);
         if(anyTop){
           box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl}</h3>`));
-          let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).top12_typical||0); });
-          ordered.forEach(n=>{
+          const byTypical = ordered.slice().sort((a,b)=>((sims[b]||{}).top12_typical||0)-((sims[a]||{}).top12_typical||0));
+          let mx=1; byTypical.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).top12_typical||0); });
+          byTypical.forEach(n=>{
             const a=dps[n], top=(sims[n]||{}).top12_typical||0;
             const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0;
             const pct=top>0?Math.round(100*a.run_dps/top):null;

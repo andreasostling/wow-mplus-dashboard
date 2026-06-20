@@ -102,9 +102,15 @@ class ReportData:
     fights: list[Fight]
     actors: dict[int, Actor]
     ability_names: dict[int, str] = field(default_factory=dict)
+    ability_schools: dict[int, int] = field(default_factory=dict)
 
     def ability_name(self, game_id: int) -> str:
         return self.ability_names.get(game_id) or f"#{game_id}"
+
+    def ability_school(self, game_id: int) -> int:
+        """WCL damage-school bitmask for an ability (1=Physical, 2/4/8/16/32/64 = magic
+        schools); 0 if unknown. From masterData.abilities `type`."""
+        return self.ability_schools.get(game_id, 0)
 
     def players(self) -> list[Actor]:
         return [a for a in self.actors.values() if a.is_player]
@@ -128,9 +134,12 @@ def get_report(client: WCLClient, code: str) -> ReportData:
     rep = res["data"]["reportData"]["report"]
     zone = rep.get("zone") or {}
     ability_names: dict[int, str] = {}
+    ability_schools: dict[int, int] = {}
     for ab in rep["masterData"].get("abilities", []) or []:
         if ab.get("gameID") is not None and ab.get("name"):
             ability_names[ab["gameID"]] = ab["name"]
+        if ab.get("gameID") is not None and ab.get("type") is not None:
+            ability_schools[ab["gameID"]] = int(ab["type"])
     actors: dict[int, Actor] = {}
     for a in rep["masterData"]["actors"]:
         actors[a["id"]] = Actor(
@@ -168,6 +177,7 @@ def get_report(client: WCLClient, code: str) -> ReportData:
         fights=fights,
         actors=actors,
         ability_names=ability_names,
+        ability_schools=ability_schools,
     )
 
 
