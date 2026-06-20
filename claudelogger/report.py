@@ -1136,8 +1136,9 @@ render();
         const anyTop = ordered.some(n=>(sims[n]||{}).top12_typical>0);
         if(anyTop){
           box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl}</h3>`));
-          let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).top12_typical||0); });
-          ordered.forEach(n=>{
+          const byTypical = ordered.slice().sort((a,b)=>((sims[b]||{}).top12_typical||0)-((sims[a]||{}).top12_typical||0));
+          let mx=1; byTypical.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).top12_typical||0); });
+          byTypical.forEach(n=>{
             const a=dps[n], top=(sims[n]||{}).top12_typical||0;
             const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0;
             const pct=top>0?Math.round(100*a.run_dps/top):null;
