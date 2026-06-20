@@ -693,10 +693,10 @@ _HTML = r"""<!doctype html>
   .b-ground{background:#123a2c;color:var(--ok)} .b-oneshot{background:#222;color:var(--mut)}
   .b-other{background:#1d2530;color:var(--accent)}
   .av-yes{color:var(--bad);font-weight:700} .av-no{color:var(--ok)} .av-null{color:var(--mut)}
-  .bars{display:flex;flex-direction:column;gap:6px}
-  .bar{display:grid;grid-template-columns:180px 1fr 48px;gap:8px;align-items:center}
-  .bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
-  .bar .fill{height:100%;background:var(--accent);min-width:4px}
+  .bars{display:flex;flex-direction:column;gap:3px}
+  .bar{display:grid;grid-template-columns:170px 1fr 44px;gap:8px;align-items:center;font-size:12px}
+  .bar .track{background:var(--bg);border:1px solid var(--line);border-radius:4px;height:12px;overflow:hidden}
+  .bar .fill{height:100%;background:var(--accent);min-width:3px;border-radius:3px}
   .controls{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
   select,input{background:var(--card);color:var(--ink);border:1px solid var(--line);
                border-radius:7px;padding:6px 8px}
@@ -740,6 +740,7 @@ _HTML = r"""<!doctype html>
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="deaths">Deaths &amp; survival</button>
     <button class="tab" data-tab="dps">DPS &amp; SimC</button>
+    <button class="tab" data-tab="offroute">Off-route mobs</button>
     <button class="tab" data-tab="progression">Progression</button>
   </div>
 
@@ -758,7 +759,7 @@ _HTML = r"""<!doctype html>
   <h2>Interruptible casts that leaked (pull-level)</h2>
   <div class="bars" id="leaked"></div>
 
-  <h2>Every death</h2>
+  <h2>Death log</h2>
   <div class="controls">
     <select id="fDungeon"><option value="">All dungeons</option></select>
     <select id="fPlayer"><option value="">All players</option></select>
@@ -793,12 +794,19 @@ _HTML = r"""<!doctype html>
   </div>
   </div>
 
+  <div class="tabpanel" id="tab-offroute">
+  <h2>⚠️ Off-route mobs — pulled but not on your planned route</h2>
+  <div class="controls"><select id="fOffroute"></select></div>
+  <div id="offroute"></div>
+  </div>
+
   <div class="tabpanel" id="tab-progression">
   <h2>Progression — runs over time</h2>
   <div id="prog-cards" class="cards"></div>
   <table id="progression"><thead><tr>
-    <th>Date</th><th>Dungeon</th><th>Key</th><th>Result</th><th>Deaths</th>
-    <th>Downtime</th><th>Group DPS</th>
+    <th data-k="date_ms">Date</th><th data-k="dungeon">Dungeon</th><th data-k="key_level">Key</th>
+    <th data-k="result_rank">Result</th><th data-k="deaths">Deaths</th>
+    <th data-k="downtime_pct">Downtime</th><th data-k="group_dps">Group DPS</th>
   </tr></thead><tbody></tbody></table>
   <div class="contrib" style="margin-top:8px">One row per logged run. Run <code>season</code> to
     accumulate more runs over time and watch deaths/timer/DPS trend.</div>
@@ -1073,47 +1081,6 @@ function renderBriefing(){
     topBox.append(empty);
     apply();
   }
-  if(rt){
-    // off-route mobs — pinned onto the actual keystone route map where possible.
-    const offRoute = rt.off_route_mobs || [];
-    if(offRoute.length){
-      // Aggregate per mob: pulls it showed in + the snapped keystone pack/floor.
-      const mobInfo = {};
-      offRoute.forEach(o => {
-        if(!mobInfo[o.mob]) mobInfo[o.mob] = {npc_id:o.npc_id, pulls:[], snap:o.snap};
-        if(o.pull!=null) mobInfo[o.mob].pulls.push(o.pull);
-        if(o.snap) mobInfo[o.mob].snap = o.snap;
-      });
-      const sorted = Object.entries(mobInfo).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
-      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">⚠️ Off-route mobs — pulled but not on your planned route</h3>`));
-      const m = rt.offroute_map;
-      if(m && m.floors && m.floors.length){
-        box.append(el('<div class="contrib" style="margin:-2px 0 8px">Overpulled mobs pinned onto the keystone.guru map (from your combat log). '
-          +'<span style="color:#ff3030">●</span> keystone pack · <span style="color:#ff9c2f">◌</span> approximate (not on keystone map) · '
-          +'<span style="color:#4caf50">●</span> your route · <span style="color:#8a8a8a">●</span> skipped packs.</div>'));
-        m.floors.forEach(f => box.append(el(offrouteFloorSvg(f))));
-      }
-      // Which pack list (keystone-snapped) + spawned adds with no map location.
-      const otbl=el('<table><thead><tr><th>Mob</th><th>Pull #(s)</th><th>Where</th><th>Wowhead</th></tr></thead><tbody></tbody></table>');
-      const ob=otbl.querySelector('tbody');
-      sorted.forEach(([mob, info])=>{
-        const pullNums = info.pulls.length ? info.pulls.map(p=>`#${p}`).join(', ') : '<span class="muted">log</span>';
-        const whLink = `<a href="https://www.wowhead.com/npc=${info.npc_id}" target="_blank" rel="noopener">npc ↗</a>`;
-        let where = '<span class="muted" title="summoned add or npc not on the keystone map — not a route-avoidable pull">add / not on route map</span>';
-        const s = info.snap;
-        if(s && s.exact){
-          const fl = (s.floor_index && s.floor_index>1) ? ` <span class="muted">(floor ${s.floor_index})</span>` : '';
-          const variant = s.match==='name' ? ' <span class="muted" title="matched by name — combat log used a variant npc id">(variant)</span>' : '';
-          where = `<span title="keystone pack ${s.pack}${s.snap_yd!=null?' · ~'+s.snap_yd+' off':''}">keystone pack <b>${s.pack}</b>${fl}${variant}</span>`;
-        } else if(s && s.mapped){
-          const fl = (s.floor_index>1) ? ` <span class="muted">(floor ${s.floor_index})</span>` : '';
-          where = `<span class="muted" title="not on the keystone map — placed approximately from your combat log${s.residual!=null?' (fit residual '+s.residual+')':''}">≈ approximate${fl}</span>`;
-        }
-        ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td><td class="contrib">${where}</td><td>${whLink}</td></tr>`));
-      });
-      box.append(otbl);
-    }
-  }
   if((b.fixate_mobs||[]).length){
     box.append(el('<h3 class="muted" style="margin:16px 0 6px">⚡ Fixate mobs — peel/kite (ignores threat)</h3>'));
     box.append(el(`<div class="contrib">${b.fixate_mobs.map(esc).join(' · ')}</div>`));
@@ -1142,6 +1109,56 @@ bsel.onchange = ()=>{ renderBriefing(); syncDungeon(bsel.value, bsel); };
 registerDungeonSelect(bsel, renderBriefing);
 if(Object.keys(BRIEF).length) renderBriefing();
 
+// ---- Off-route mobs (own tab) — overpulled mobs pinned onto the keystone route map ----
+const osel = document.getElementById('fOffroute');
+Object.keys(BRIEF).sort().forEach(dn=>osel.append(el(`<option value="${esc(dn)}">${esc(dn)}</option>`)));
+function renderOffroute(){
+  const box = document.getElementById('offroute'); box.innerHTML='';
+  const b = BRIEF[osel.value]; const rt = b && b.route;
+  const offRoute = (rt && rt.off_route_mobs) || [];
+  if(!offRoute.length){
+    box.append(el('<div class="muted">No off-route mobs recorded for this dungeon — every pulled mob was on the planned route.</div>'));
+    return;
+  }
+  // Aggregate per mob: pulls it showed in + the snapped keystone pack/floor.
+  const mobInfo = {};
+  offRoute.forEach(o => {
+    if(!mobInfo[o.mob]) mobInfo[o.mob] = {npc_id:o.npc_id, pulls:[], snap:o.snap};
+    if(o.pull!=null) mobInfo[o.mob].pulls.push(o.pull);
+    if(o.snap) mobInfo[o.mob].snap = o.snap;
+  });
+  const sorted = Object.entries(mobInfo).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
+  const m = rt.offroute_map;
+  if(m && m.floors && m.floors.length){
+    box.append(el('<div class="contrib" style="margin:-2px 0 8px">Overpulled mobs pinned onto the keystone.guru map (from your combat log). '
+      +'<span style="color:#ff3030">●</span> keystone pack · <span style="color:#ff9c2f">◌</span> approximate (not on keystone map) · '
+      +'<span style="color:#4caf50">●</span> your route · <span style="color:#8a8a8a">●</span> skipped packs.</div>'));
+    m.floors.forEach(f => box.append(el(offrouteFloorSvg(f))));
+  }
+  // Which pack list (keystone-snapped) + spawned adds with no map location.
+  const otbl=el('<table><thead><tr><th>Mob</th><th>Pull #(s)</th><th>Where</th><th>Wowhead</th></tr></thead><tbody></tbody></table>');
+  const ob=otbl.querySelector('tbody');
+  sorted.forEach(([mob, info])=>{
+    const pullNums = info.pulls.length ? info.pulls.map(p=>`#${p}`).join(', ') : '<span class="muted">log</span>';
+    const whLink = `<a href="https://www.wowhead.com/npc=${info.npc_id}" target="_blank" rel="noopener">npc ↗</a>`;
+    let where = '<span class="muted" title="summoned add or npc not on the keystone map — not a route-avoidable pull">add / not on route map</span>';
+    const s = info.snap;
+    if(s && s.exact){
+      const fl = (s.floor_index && s.floor_index>1) ? ` <span class="muted">(floor ${s.floor_index})</span>` : '';
+      const variant = s.match==='name' ? ' <span class="muted" title="matched by name — combat log used a variant npc id">(variant)</span>' : '';
+      where = `<span title="keystone pack ${s.pack}${s.snap_yd!=null?' · ~'+s.snap_yd+' off':''}">keystone pack <b>${s.pack}</b>${fl}${variant}</span>`;
+    } else if(s && s.mapped){
+      const fl = (s.floor_index>1) ? ` <span class="muted">(floor ${s.floor_index})</span>` : '';
+      where = `<span class="muted" title="not on the keystone map — placed approximately from your combat log${s.residual!=null?' (fit residual '+s.residual+')':''}">≈ approximate${fl}</span>`;
+    }
+    ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td><td class="contrib">${where}</td><td>${whLink}</td></tr>`));
+  });
+  box.append(otbl);
+}
+osel.onchange = ()=>{ renderOffroute(); syncDungeon(osel.value, osel); };
+registerDungeonSelect(osel, renderOffroute);
+if(Object.keys(BRIEF).length) renderOffroute();
+
 // bucket bars
 const bmax = Math.max(1,...Object.values(S.bucket_breakdown));
 document.getElementById('buckets').append(...Object.entries(S.bucket_breakdown)
@@ -1169,7 +1186,11 @@ document.getElementById('ccmobs').append(
 // filters
 const set=(id,vals)=>{const s=document.getElementById(id);[...new Set(vals)].sort().forEach(v=>
   s.append(el(`<option value="${esc(v)}">${esc(v)}</option>`)));};
-set('fDungeon',rows.map(r=>r.dungeon)); set('fPlayer',rows.map(r=>r.player));
+// fDungeon lists the full dungeon set (death rows ∪ runs ∪ briefings) so the dungeon-sync
+// always lands on the picked dungeon (filtering to a no-death dungeon shows an empty log)
+// instead of falling back to "All".
+set('fDungeon',[...rows.map(r=>r.dungeon), ...RUNS.map(r=>r.dungeon), ...Object.keys(BRIEF)]);
+set('fPlayer',rows.map(r=>r.player));
 Object.keys(bucketLabel).forEach(k=>document.getElementById('fBucket')
   .append(el(`<option value="${k}">${bucketLabel[k][0]}</option>`)));
 
@@ -1501,26 +1522,42 @@ if(Object.keys(routeAnalyses).length) renderRoute();
 (function(){
   const fmtDate = (ms)=> ms ? new Date(ms).toISOString().slice(0,10) : '—';
   const fmtMin = (s)=>{s=Math.max(0,Math.round(Math.abs(s||0)));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;};
-  const runs = RUNS.slice().sort((a,b)=>(a.date_ms||0)-(b.date_ms||0));
   const tb = document.querySelector('#progression tbody');
-  let timed=0, withTimer=0, totalDeaths=0;
-  runs.forEach(r=>{
+  // Build per-run sort values up front — Result/Group DPS/Date are computed, so we key the
+  // sort off raw numbers/strings, not the rendered <td> text. result_rank: timed runs rank
+  // by margin (more spare time = better), over-time runs go negative, untimed lowest.
+  const data = RUNS.map(r=>{
     const t = r.timing||{};
-    const groupDps = Object.values(t.dps_actual||{}).reduce((s,v)=>s+(v.run_dps||0),0);
-    let result = '<span class="muted">—</span>';
-    if(t.timer_s){
-      withTimer++;
-      if(t.on_time){ timed++; result=`<span class="av-no">timed +${fmtMin(t.margin_s)}</span>`; }
-      else result=`<span class="av-yes">over ${fmtMin(t.margin_s)}</span>`;
-    }
-    totalDeaths += t.deaths||0;
-    tb.append(el(`<tr><td class="muted">${fmtDate(r.date_ms)}</td><td>${esc(r.dungeon)}</td>
-      <td>+${r.key_level}</td><td>${result}</td><td>${t.deaths||0}</td>
-      <td>${t.downtime_pct!=null?t.downtime_pct+'%':'—'}</td>
-      <td>${groupDps?Math.round(groupDps/1000)+'k':'—'}</td></tr>`));
+    const group_dps = Object.values(t.dps_actual||{}).reduce((s,v)=>s+(v.run_dps||0),0);
+    const result_rank = t.timer_s ? (t.on_time ? (t.margin_s||0) : -Math.abs(t.margin_s||0)) : -1e12;
+    return {date_ms:r.date_ms||0, dungeon:r.dungeon||'', key_level:r.key_level||0, result_rank,
+            deaths:t.deaths||0, downtime_pct:(t.downtime_pct!=null?t.downtime_pct:-1),
+            group_dps, _r:r, _t:t};
   });
-  const cards = [['Runs', runs.length], ['Timed', withTimer?`${timed}/${withTimer}`:'—'],
-    ['Total deaths', totalDeaths], ['Avg deaths/run', runs.length?(totalDeaths/runs.length).toFixed(1):'—']];
+  let sortK='date_ms', sortDir=-1;  // default: most recent run on top
+  function renderProg(){
+    data.sort((a,b)=>{let x=a[sortK],y=b[sortK];return (x>y?1:x<y?-1:0)*sortDir;});
+    tb.innerHTML='';
+    data.forEach(d=>{
+      const t=d._t, r=d._r;
+      let result = '<span class="muted">—</span>';
+      if(t.timer_s){
+        if(t.on_time) result=`<span class="av-no">timed +${fmtMin(t.margin_s)}</span>`;
+        else result=`<span class="av-yes">over ${fmtMin(t.margin_s)}</span>`;
+      }
+      tb.append(el(`<tr><td class="muted">${fmtDate(r.date_ms)}</td><td>${esc(r.dungeon)}</td>
+        <td>+${r.key_level}</td><td>${result}</td><td>${t.deaths||0}</td>
+        <td>${t.downtime_pct!=null?t.downtime_pct+'%':'—'}</td>
+        <td>${d.group_dps?Math.round(d.group_dps/1000)+'k':'—'}</td></tr>`));
+    });
+  }
+  document.querySelectorAll('#progression th[data-k]').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; sortDir=(sortK===k)?-sortDir:1; sortK=k; renderProg();});
+  renderProg();
+  let timed=0, withTimer=0, totalDeaths=0;
+  data.forEach(d=>{const t=d._t; if(t.timer_s){withTimer++; if(t.on_time)timed++;} totalDeaths+=t.deaths||0;});
+  const cards = [['Runs', data.length], ['Timed', withTimer?`${timed}/${withTimer}`:'—'],
+    ['Total deaths', totalDeaths], ['Avg deaths/run', data.length?(totalDeaths/data.length).toFixed(1):'—']];
   const cw = document.getElementById('prog-cards');
   cards.forEach(([l,n])=>cw.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
 })();
