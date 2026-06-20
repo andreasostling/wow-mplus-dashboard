@@ -563,7 +563,7 @@ def write_html_artifact(out_dir: Path, season: dict, runs: list[dict], briefings
 _HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClaudeLogger — M+ Death Analysis</title>
+<title>ClaudeLogger — M+ Analysis</title>
 <style>
   :root{--bg:#0f1115;--card:#171a21;--ink:#e7e9ee;--mut:#9aa3b2;--line:#262b36;
         --bad:#ff5d5d;--ok:#46d39a;--warn:#ffb454;--accent:#6aa3ff;}
@@ -627,7 +627,7 @@ _HTML = r"""<!doctype html>
   .tabpanel{display:none} .tabpanel.active{display:block}
 </style></head>
 <body><div class="wrap">
-  <h1>ClaudeLogger — Mythic+ Death Analysis</h1>
+  <h1>ClaudeLogger — Mythic+ Analysis</h1>
   <p class="sub" id="sub"></p>
 
   <h2 style="margin-top:14px">🗺️ Before the key — route &amp; what to stop/kick</h2>
@@ -909,7 +909,7 @@ function renderBriefing(){
       return s.size?s:new Set(['tank','healer','dps']);};
     const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
     const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
-    topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 What the guides flag <span class="muted" style="font-weight:normal">· Method.gg</span>${src}</h3>`));
+    topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
     // Role filter — toggle which roles' mechanics are shown (all on by default).
     const checked=new Set(['tank','healer','dps']);
     const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show for:</span></div>`);
