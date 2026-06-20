@@ -158,6 +158,19 @@ ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
     "Decayheat": ("eu", "doomhammer", "decayheat"),
 }
 
+# Per-dungeon "quick boss guide" YouTube links, surfaced in the briefing next to the
+# keystone route link. Keyed by canonical dungeon name (matches DEFAULT_ROUTES).
+BOSS_GUIDES: dict[str, str] = {
+    "Algeth'ar Academy": "https://youtu.be/dvhYFJBSJhM",
+    "Magisters' Terrace": "https://youtu.be/FRnQyotFi04",
+    "Maisara Caverns": "https://youtu.be/8cpsHnvKPZM",
+    "Nexus-Point Xenas": "https://youtu.be/KFoBXcd6w7E",
+    "Pit of Saron": "https://youtu.be/y8l90hq1w3I",
+    "Seat of the Triumvirate": "https://youtu.be/P8ImOX08rZk",
+    "Skyreach": "https://youtu.be/knQiif1k4QA",
+    "Windrunner Spire": "https://youtu.be/P8AUUm_sJ14",
+}
+
 
 @dataclass
 class SimcKnobs:

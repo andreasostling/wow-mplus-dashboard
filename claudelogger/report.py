@@ -12,6 +12,7 @@ from typing import Any
 
 from . import combatlog, mapviz
 from .classify import AVOIDABLE_BUCKETS, INTERRUPT, STUN, DeathFinding
+from .config import BOSS_GUIDES
 from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
@@ -173,6 +174,15 @@ def _counter_for(t: dict) -> tuple[str, str, str]:
     return "Defensive / position", "other", "Non-interruptible mechanic — defensive cooldown or pre-positioning."
 
 
+def _boss_guide_for(dungeon: str) -> str:
+    """BOSS_GUIDES lookup tolerant of name variants — the briefing name carries a leading
+    'The' ('The Seat of the Triumvirate') while the route/config name doesn't; normalize
+    both (drop leading 'the', apostrophes, spaces) so either form resolves."""
+    norm = lambda s: re.sub(r"[^a-z0-9]", "", re.sub(r"^the\s+", "", (s or "").strip().lower()))
+    target = norm(dungeon)
+    return next((v for k, v in BOSS_GUIDES.items() if norm(k) == target), "")
+
+
 def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = None,
                             log_positions: dict | None = None,
                             public_danger: dict | None = None,
@@ -285,6 +295,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         out[dungeon] = {
             "fixate_mobs": fixate_mobs,
             "dungeon": dungeon,
+            "boss_guide": _boss_guide_for(dungeon),
             "runs": len(drs),
             "key_levels": sorted({r["key_level"] for r in drs}),
             "total_deaths": len(deaths),
@@ -353,7 +364,8 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
 
 
 def _empty_briefing(name: str) -> dict[str, Any]:
-    return {"dungeon": name, "runs": 0, "key_levels": [], "total_deaths": 0, "wipes": 0,
+    return {"dungeon": name, "boss_guide": _boss_guide_for(name),
+            "runs": 0, "key_levels": [], "total_deaths": 0, "wipes": 0,
             "threats": [], "peel_mobs": [], "fixate_mobs": [], "leaked_casts": [],
             "cc_starved_pulls": 0, "pulls": 0, "players_dying": [], "comp_interrupts": [],
             "comp_stuns": [], "comp_other_cc": [], "dangerous_casts": [], "danger_spells": [],
@@ -961,10 +973,15 @@ function renderBriefing(){
   };
   // ---- route stop/kick targets — lead the panel ----
   const rt=b.route;
-  // Surface the keystone route link at the top header too (per-dungeon; blank if none).
+  // Surface the keystone route link + quick boss-guide video at the top header
+  // (per-dungeon; each blank if absent).
   const _topLink=document.getElementById('route-link-top');
-  if(_topLink) _topLink.innerHTML = (rt && rt.code)
-    ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
+  if(_topLink){
+    const _lp=[];
+    if(rt && rt.code) _lp.push(`<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>`);
+    if(b.boss_guide) _lp.push(`<a href="${esc(b.boss_guide)}" target="_blank" rel="noopener">▶ boss guide</a>`);
+    _topLink.innerHTML = _lp.join(' · ');
+  }
   if(!rt){ box.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
     const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
