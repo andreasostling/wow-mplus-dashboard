@@ -197,6 +197,13 @@ def _analyze_lust(
     issues: list[RouteIssue] = []
 
     current = sorted((pa for pa in pulls if pa.bloodlust), key=lambda p: p.cumulative_time_s)
+    # A single keystone pull can export as several raid_events waves that share one
+    # pull number (e.g. Magisters' Terrace pull 10 splits into two waves). apply_lust_
+    # overrides flags every wave, so collapse to the first wave per pull number — else
+    # the gap check compares a pull against itself ("only 57s after pull 10").
+    seen_pulls: set[int] = set()
+    current = [pa for pa in current
+               if not (pa.pull_num in seen_pulls or seen_pulls.add(pa.pull_num))]
     lusts_in_route = []
     for pa in current:
         ctx = []
@@ -239,13 +246,16 @@ def _analyze_lust(
     for i in range(1, len(current)):
         gap = current[i].cumulative_time_s - current[i-1].cumulative_time_s
         if gap < knobs.lust_cd_s:
+            free_at_min = (current[i-1].cumulative_time_s + knobs.lust_cd_s) / 60
             issues.append(RouteIssue(
                 category="lust_timing",
                 severity="critical",
                 pull_num=current[i].pull_num,
                 message=f"Lust on pull {current[i].pull_num} is only {gap:.0f}s after pull "
                         f"{current[i-1].pull_num} (exhaustion lasts {knobs.lust_cd_s}s)",
-                detail="The group is still Exhausted — this second lust has no effect. Space them out.",
+                detail=f"The group is still Exhausted from the lust on pull {current[i-1].pull_num} "
+                       f"— this one is wasted. Re-space it to a pull ~{free_at_min:.0f} min into the "
+                       f"run (after the {knobs.lust_cd_s//60}-min exhaustion clears).",
             ))
 
     return lusts_in_route, issues

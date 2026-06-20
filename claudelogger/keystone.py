@@ -268,7 +268,7 @@ def lust_pulls_for(dungeon: str, cache_dir: Path, repo_root: Path, *, refresh: b
     stays offline-friendly on re-runs. Memoised per (dungeon, cache_dir) within a run."""
     manual = load_lust_overrides(repo_root)
     if dungeon in manual:
-        return manual[dungeon]
+        return sorted(set(manual[dungeon]))
     memo_key = (dungeon, str(cache_dir))
     if not refresh and memo_key in _lust_pulls_memo:
         return _lust_pulls_memo[memo_key]
@@ -280,5 +280,8 @@ def lust_pulls_for(dungeon: str, cache_dir: Path, repo_root: Path, *, refresh: b
     if short:
         route = fetch_route(dungeon, short, cache_dir, refresh=refresh)
         pulls = route.get("lust_pulls", []) or []
+    # A killZone can carry two lust-family spells (e.g. Time Warp + Drums), which would
+    # otherwise list the same pull twice → a self-referential "Xs after itself" critical.
+    pulls = sorted(set(pulls))
     _lust_pulls_memo[memo_key] = pulls
     return pulls

@@ -320,6 +320,17 @@ def parse_route_pulls(route_text: str) -> list[dict]:
             name = raw_name.replace("BOSS_", "").rsplit("_", 1)[0].replace("-", " ").title()
             enemies.append({"name": name, "health": health, "is_boss": is_boss, "raw": raw_name})
 
+        # The keystone export sometimes lists the same enemy instance (identical key)
+        # twice within a pull — a mob spanning two kill-zones, or a partial/full HP pair
+        # (e.g. Corewarden Nysarra's 22.5M + 51.9M on Xenas pull 13). Count each instance
+        # once, keeping the larger HP, so total_health isn't double-counted.
+        by_key: dict[str, dict] = {}
+        for e in enemies:
+            prev = by_key.get(e["raw"])
+            if prev is None or e["health"] > prev["health"]:
+                by_key[e["raw"]] = e
+        enemies = list(by_key.values())
+
         total_health = sum(e["health"] for e in enemies)
         pulls.append({
             "pull_num": pull_num,
