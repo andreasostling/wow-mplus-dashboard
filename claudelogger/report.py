@@ -730,33 +730,36 @@ _HTML = r"""<!doctype html>
   .tabpanel{display:none} .tabpanel.active{display:block}
 </style></head>
 <body><div class="wrap">
-  <h1>ClaudeLogger — Mythic+ Analysis</h1>
+  <h1>Mythic+ Analysis</h1>
   <p class="sub" id="sub"></p>
 
-  <h2 style="margin-top:14px">🗺️ Before the key — route &amp; what to stop/kick</h2>
-  <div class="controls"><select id="fBrief"></select></div>
-  <div id="top-stops"></div>
-
   <div class="tabs" id="tabs">
-    <button class="tab active" data-tab="deaths">Deaths &amp; survival</button>
-    <button class="tab" data-tab="dps">DPS &amp; SimC</button>
+    <button class="tab active" data-tab="briefing">Briefing</button>
+    <button class="tab" data-tab="deaths">Deaths</button>
     <button class="tab" data-tab="offroute">Off-route mobs</button>
+    <button class="tab" data-tab="dps">DPS &amp; cooldowns</button>
     <button class="tab" data-tab="progression">Progression</button>
   </div>
 
-  <div class="tabpanel active" id="tab-deaths">
+  <div class="tabpanel active" id="tab-briefing">
+  <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch</h2>
+  <div class="controls"><select id="fBrief"></select></div>
+  <div id="briefing"></div>
+  </div>
+
+  <div class="tabpanel" id="tab-deaths">
   <div class="cards" id="cards"></div>
 
-  <h2>Pre-run briefing — pull this up before a key</h2>
-  <div id="briefing"></div>
-
   <h2>What's killing us — cause breakdown</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Overview by cause, season-wide. Click a bar to drill into the Death log below, filtered to that cause.</div>
   <div class="bars" id="buckets"></div>
 
   <h2>Mobs that needed a kick / stun</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Retrospective — mobs whose casts we failed to stop this season. The forward plan for these is the Briefing tab's route stop targets.</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="ccmobs"></div>
 
   <h2>Interruptible casts that leaked (pull-level)</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Retrospective evidence behind the Briefing tab's 🎯 Kick priority — the casts that actually got through.</div>
   <div class="bars" id="leaked"></div>
 
   <h2>Death log</h2>
@@ -781,7 +784,8 @@ _HTML = r"""<!doctype html>
   <div id="run-debrief"></div>
 
   <div id="simc-section" style="display:none">
-  <h2>SimC — DPS by dungeon</h2>
+  <h2>SimC ceiling — potential DPS by dungeon</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Cross-dungeon <em>potential</em> at your gear (no specific run). The run debrief above is what you actually did; this is the simmed ceiling per spec/dungeon vs the real +12 field.</div>
   <div class="controls"><select id="fSimcDungeon"></select></div>
   <table id="simc-dps"><thead><tr>
     <th>Dungeon</th><th>Player</th><th>Spec</th><th>Our DPS (SimC)</th><th>Top +12 log</th><th>Ours vs top</th><th>Role</th>
@@ -911,7 +915,6 @@ const bsel = document.getElementById('fBrief');
 Object.keys(BRIEF).sort().forEach(dn=>bsel.append(el(`<option value="${esc(dn)}">${esc(dn)}</option>`)));
 function renderBriefing(){
   const b = BRIEF[bsel.value]; const box = document.getElementById('briefing'); box.innerHTML='';
-  const topBox = document.getElementById('top-stops'); topBox.innerHTML='';
   if(!b){box.append(el('<div class="muted">No data.</div>'));return;}
   const keys=b.key_levels||[];
   const kr = keys.length? (keys.length===1?`+${keys[0]}`:`+${keys[0]}–+${keys[keys.length-1]}`):'?';
@@ -951,32 +954,40 @@ function renderBriefing(){
   };
   // ---- route stop/kick targets — lead the panel ----
   const rt=b.route;
-  if(!rt){ topBox.append(el('<div class="muted">No route data for this dungeon.</div>')); }
+  if(!rt){ box.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
     const rtLink = rt.code ? `<a href="https://keystone.guru/${esc(rt.code)}" target="_blank" rel="noopener">open route ↗</a>` : '';
-    topBox.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
-    if(!rt.ok){ topBox.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
-    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ topBox.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
+    box.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls) ${rtLink}</h3>`));
+    if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
+    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
     else{
       if((rt.kick_targets||[]).length){
-        topBox.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
+        box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
         const rtbl=el('<table><thead><tr><th>Mob</th><th>Interrupt these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
         const rb=rtbl.querySelector('tbody');
         rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
           <td class="contrib">${renderSpells(kt.spell_pairs, kt.spells)}</td>
           <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        topBox.append(rtbl);
+        box.append(rtbl);
       }
       if((rt.stop_targets||[]).length){
-        topBox.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
+        box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
         const stbl=el('<table><thead><tr><th>Mob</th><th>Stop these</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
         const sb=stbl.querySelector('tbody');
         rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
           <td class="contrib">${renderSpells(st.spell_pairs, st.spells)}</td>
           <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        topBox.append(stbl);
+        box.append(stbl);
       }
     }
+  }
+  // 🎯 Kick priority — the ranked interrupt plan (by damage per leaked cast). The Deaths
+  // tab's "casts that leaked" is the per-pull evidence behind this ranking.
+  if((b.leaked_casts||[]).length){
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority — interrupt highest first <span class="muted" style="font-weight:normal">· by damage per leaked cast</span></h3>'));
+    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
+    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
+      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span>${Math.round((dmg||0)/1000)}k/cast <span class="muted">×${n}</span></span></div>`)));
   }
   if((b.dangerous_casts||[]).length){
     const allDanger=b.dangerous_casts;
@@ -994,12 +1005,12 @@ function renderBriefing(){
       src=` <span class="muted" style="font-weight:normal">· estimated from ${dm.n_logs||0} public log(s)${kr?` (${kr}, median)`:''} — no run of your own yet</span>`;
     }
     const h3=el(`<h3 class="muted" style="margin:6px 0 6px"></h3>`);
-    topBox.append(h3);
+    box.append(h3);
     let showTb=false;
     if(tbCount){
       const wrap=el(`<label class="muted" style="cursor:pointer;display:inline-flex;gap:4px;align-items:center;font-size:12px;margin:0 0 6px"><input type="checkbox"> Show tank busters (${tbCount})</label>`);
       wrap.querySelector('input').addEventListener('change',e=>{showTb=e.target.checked;render();});
-      topBox.append(wrap);
+      box.append(wrap);
     }
     const dtbl=el('<table><thead><tr><th>Cast</th><th>Mobs</th><th>Damage</th><th>Type</th></tr></thead><tbody></tbody></table>');
     const db=dtbl.querySelector('tbody');
@@ -1022,7 +1033,7 @@ function renderBriefing(){
           <td>${parts.join(' · ')}</td><td class="muted">${type}</td></tr>`));
       });
     };
-    topBox.append(dtbl);
+    box.append(dtbl);
     render();
   }
   // ---- Method.gg guide flags (qualitative; covers un-logged dungeons too) ----
@@ -1045,7 +1056,7 @@ function renderBriefing(){
       return s.size?s:new Set(['tank','healer','dps']);};
     const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
     const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
-    topBox.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
+    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
     // Additive layer filter — interrupts are the default base layer; each role
     // toggle *adds* its mechanics on top. A row is visible if it's an interrupt
     // (when that layer is on) OR it belongs to an enabled role. All toggles are
@@ -1076,9 +1087,9 @@ function renderBriefing(){
       wrap.querySelector('input').addEventListener('change',e=>{e.target.checked?checked.add(key):checked.delete(key);apply();});
       ctrl.append(wrap);
     });
-    topBox.append(ctrl); topBox.append(gtbl);
+    box.append(ctrl); box.append(gtbl);
     const empty=el(`<div class="muted" style="font-size:11px;display:none">Nothing selected — tick a layer above to show mechanics.</div>`);
-    topBox.append(empty);
+    box.append(empty);
     apply();
   }
   if((b.fixate_mobs||[]).length){
@@ -1091,15 +1102,9 @@ function renderBriefing(){
     b.peel_mobs.forEach(([m,n])=>box.append(el(`<div class="bar"><span>${esc(m)}</span>
       <span class="track"><span class="fill" style="width:${100*n/pmx}%"></span></span><span>${n}</span></div>`)));
   }
-  if((b.leaked_casts||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority (by damage per leaked cast)</h3>'));
-    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
-    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar"><span>${esc(sp)}</span>
-      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span>${Math.round((dmg||0)/1000)}k/cast <span class="muted">×${n}</span></span></div>`)));
-  }
-  // who dies here
+  // who tends to die here — forward-looking ("protect them"); the Deaths tab has the counts
   if((b.players_dying||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">💀 Who dies here</h3>'));
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">💀 Who to protect — dies here most often</h3>'));
     const pdmx=Math.max(...b.players_dying.map(a=>a[1]));
     b.players_dying.forEach(([p,n])=>box.append(el(`<div class="bar"><span>${esc(p)}</span>
       <span class="track"><span class="fill" style="width:${100*n/pdmx}%"></span></span><span>${n}</span></div>`)));
@@ -1159,12 +1164,17 @@ osel.onchange = ()=>{ renderOffroute(); syncDungeon(osel.value, osel); };
 registerDungeonSelect(osel, renderOffroute);
 if(Object.keys(BRIEF).length) renderOffroute();
 
-// bucket bars
+// bucket bars — the deaths OVERVIEW; clicking one drills into the Death log filtered to it
 const bmax = Math.max(1,...Object.values(S.bucket_breakdown));
-document.getElementById('buckets').append(...Object.entries(S.bucket_breakdown)
-  .sort((a,b)=>b[1]-a[1]).map(([k,v])=>{const [lbl,cls]=bucketLabel[k]||[k,'b-other'];
-  return el(`<div class="bar"><span><span class="pill ${cls}">${esc(lbl)}</span></span>
-    <span class="track"><span class="fill" style="width:${100*v/bmax}%"></span></span><span>${v}</span></div>`);}));
+const bucketBox = document.getElementById('buckets');
+Object.entries(S.bucket_breakdown).sort((a,b)=>b[1]-a[1]).forEach(([k,v])=>{
+  const [lbl,cls]=bucketLabel[k]||[k,'b-other'];
+  const bar=el(`<div class="bar" style="cursor:pointer" title="Click to filter the Death log by this cause"><span><span class="pill ${cls}">${esc(lbl)}</span></span>
+    <span class="track"><span class="fill" style="width:${100*v/bmax}%"></span></span><span>${v}</span></div>`);
+  bar.onclick=()=>{const f=document.getElementById('fBucket');f.value=k;render();
+    document.getElementById('deaths').scrollIntoView({behavior:'smooth',block:'start'});};
+  bucketBox.append(bar);
+});
 
 // cc mobs
 function mobList(title,arr){const d=el(`<div><h3 class="muted" style="margin:0 0 6px">${title}</h3></div>`);
@@ -1284,9 +1294,9 @@ render();
       box.append(el('<div class="contrib" style="margin-top:6px">Boss combat time: '+t.boss_times.map(b=>`${esc(b.name)} ${fmtMin(b.duration_s)}${b.segments>1?` <span class="muted">(${b.segments} phases)</span>`:''}`).join(' · ')+'</div>'));
     box.append(el(`<div class="contrib" style="margin-top:4px">${esc(t.forces_note||'')}</div>`));
 
-    // B: DPS — two views, each with its own benchmark and scale:
-    //    B1 = run-DPS vs the real +kl field (typical = 90th-percentile logger)
-    //    B2 = run-DPS vs your own SimC ceiling (gear-fair target)
+    // B: DPS — ONE combined view per player. The bar is actual run-DPS; the orange
+    //    marker is the typical (p90) +kl logger and the faint region is your SimC ceiling,
+    //    with both gap %s on the right. (Replaces the old three near-identical blocks.)
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
@@ -1298,50 +1308,35 @@ render();
       if(!haveSim){
         box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS</h3>'));
         box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+'+kl+' benchmark, and the gap%.</div>'));
+        let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps); });
+        ordered.forEach(n=>{ const a=dps[n]; const actW=Math.round(100*a.run_dps/mx);
+          box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
+            <span class="track"><span class="act" style="width:${actW}%" title="${actTitle(a)}"></span></span>
+            <span class="muted" style="font-size:12px">${Math.round(a.run_dps/1000)}k</span></div>`)); });
       } else {
-        // B1 — actual vs the typical (90th-percentile) +kl logger for each spec.
-        const anyTop = ordered.some(n=>(sims[n]||{}).top12_typical>0);
-        if(anyTop){
-          box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl}</h3>`));
-          const byTypical = ordered.slice().sort((a,b)=>((sims[b]||{}).top12_typical||0)-((sims[a]||{}).top12_typical||0));
-          let mx=1; byTypical.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).top12_typical||0); });
-          byTypical.forEach(n=>{
-            const a=dps[n], top=(sims[n]||{}).top12_typical||0;
-            const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0;
-            const pct=top>0?Math.round(100*a.run_dps/top):null;
-            const txt = pct!==null
-              ? `<span class="${pctClass(pct)}">${Math.round(a.run_dps/1000)}k · ${pct}% of typical</span>`
-              : `${Math.round(a.run_dps/1000)}k`;
-            const mark = top>0?`<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
-            box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
-              <span class="track"><span class="act" style="width:${actW}%" title="${actTitle(a)}"></span>${mark}</span>
-              <span class="muted" style="font-size:12px">${txt}</span></div>`));
-          });
-          box.append(el(`<div class="contrib"><span style="color:#e0a040">▎</span> = typical +${kl} logger (90th-percentile run-DPS, WCL) for that spec — the % denominator. Real-player context, not your gear.</div>`));
-        }
-        // B2 — actual vs your own SimC ceiling. Sim-hot specs get a ⚠ flag explained below.
-        const anyCeil = ordered.some(n=>(sims[n]||{}).dps>0);
-        if(anyCeil){
-          box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs your SimC ceiling</h3>'));
-          let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps, (sims[n]||{}).dps||0); });
-          let anyHot=false;
-          ordered.forEach(n=>{
-            const a=dps[n], s=sims[n]||{}, ceil=s.dps||0;
-            const actW=Math.round(100*a.run_dps/mx), ceilW=ceil>0?Math.round(100*ceil/mx):0;
-            const pct=ceil>0?Math.round(100*a.run_dps/ceil):null;
-            const hot = s.sim_realism==='optimistic'; if(hot) anyHot=true;
-            const hotMark = hot?` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — ceiling likely optimistic">⚠</span>`:'';
-            const txt = pct!==null
-              ? `<span class="${pctClass(pct)}">${Math.round(a.run_dps/1000)}k · ${pct}% of ceiling</span>${hotMark}`
-              : `${Math.round(a.run_dps/1000)}k${hotMark}`;
-            box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
-              <span class="track">${ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:''}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span></span>
-              <span class="muted" style="font-size:12px">${txt}</span></div>`));
-          });
-          let cap = '<span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear — the gear-fair target.';
-          if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
-          box.append(el('<div class="contrib">'+cap+'</div>'));
-        }
+        box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl} &amp; your SimC ceiling</h3>`));
+        let mx=1; ordered.forEach(n=>{ const s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, s.top12_typical||0, s.dps||0); });
+        let anyHot=false;
+        ordered.forEach(n=>{
+          const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, ceil=s.dps||0;
+          const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
+          const pctT=top>0?Math.round(100*a.run_dps/top):null;
+          const pctC=ceil>0?Math.round(100*a.run_dps/ceil):null;
+          const hot = s.sim_realism==='optimistic'; if(hot) anyHot=true;
+          const hotMark = hot?` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — ceiling likely optimistic">⚠</span>`:'';
+          const ceilRegion = ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:'';
+          const topMark = top>0?`<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
+          const bits=[];
+          if(pctT!==null) bits.push(`<span class="${pctClass(pctT)}" title="vs typical +${kl} logger">${pctT}% typ</span>`);
+          if(pctC!==null) bits.push(`<span class="${pctClass(pctC)}" title="vs your SimC ceiling">${pctC}% ceil</span>`);
+          const txt = `${Math.round(a.run_dps/1000)}k${bits.length?' · '+bits.join(' · '):''}${hotMark}`;
+          box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
+            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span>${topMark}</span>
+            <span class="muted" style="font-size:12px">${txt}</span></div>`));
+        });
+        let cap = '<span style="color:#e0a040">▎</span> = typical +'+kl+' logger (p90 WCL run-DPS, real-player context) · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear (gear-fair target).';
+        if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
+        box.append(el('<div class="contrib">'+cap+'</div>'));
       }
     }
 
@@ -1472,18 +1467,36 @@ function renderRoute(){
       ${Math.round((t.combat_uptime||0.85)*100)}% combat uptime, plus ${t.estimated_clear_s? Math.round(ra.total_travel_s||0):0}s travel.</div>
   </div>`));
 
-  // Bloodlust currently in the route (we don't recommend "optimal" — just flag gaps).
+  // Bloodlust placement + its verdicts in ONE place — lust_timing issues annotate the
+  // rows here (and route-level lust notes sit just below), instead of being repeated in
+  // the generic "Issues" list further down.
+  const allIssues = ra.issues||[];
+  const lustIssues = allIssues.filter(i=>i.category==='lust_timing');
+  const lustByPull = {};
+  lustIssues.forEach(i=>{ if(i.pull_num!=null){(lustByPull[i.pull_num]=lustByPull[i.pull_num]||[]).push(i);} });
   const lusts = ra.lusts_in_route||[];
   box.append(el('<h3 class="muted" style="margin:14px 0 6px">🔥 Bloodlust in this route</h3>'));
   if(lusts.length){
-    const ltbl=el('<table><thead><tr><th>Pull</th><th>~When</th><th>What</th></tr></thead><tbody></tbody></table>');
+    const ltbl=el('<table><thead><tr><th>Pull</th><th>~When</th><th>What</th><th>Verdict</th></tr></thead><tbody></tbody></table>');
     const lb=ltbl.querySelector('tbody');
-    lusts.forEach(l=>lb.append(el(`<tr><td><span class="lust-pill">Pull ${l.pull_num}</span></td>
-      <td class="muted">${fmtMin(l.at_s||0)}</td><td class="contrib">${esc(l.reason)}</td></tr>`)));
+    lusts.forEach(l=>{
+      const probs=lustByPull[l.pull_num]||[];
+      const verdict = probs.length
+        ? probs.map(p=>`<span class="${p.severity==='critical'?'sev-critical':'sev-warning'}" title="${esc(p.detail||'')}">${esc(p.message)}</span>`).join('<br>')
+        : '<span class="av-no">ok</span>';
+      lb.append(el(`<tr><td><span class="lust-pill">Pull ${l.pull_num}</span></td>
+        <td class="muted">${fmtMin(l.at_s||0)}</td><td class="contrib">${esc(l.reason)}</td>
+        <td class="contrib">${verdict}</td></tr>`));
+    });
     box.append(ltbl);
   } else {
-    box.append(el('<div class="muted">No bloodlust assigned in this route — see issues below.</div>'));
+    box.append(el('<div class="muted">No bloodlust assigned in this route.</div>'));
   }
+  // Route-level lust notes with no specific pull (unused slots, none-assigned, …).
+  lustIssues.filter(i=>i.pull_num==null).forEach(i=>{
+    const sc=i.severity==='critical'?'sev-critical':i.severity==='warning'?'sev-warning':'sev-info';
+    box.append(el(`<div class="contrib" style="margin:4px 0"><span class="${sc}">🔥 ${esc(i.message)}</span> — ${esc(i.detail)}</div>`));
+  });
 
   // Pull timeline bar chart
   box.append(el('<h3 class="muted" style="margin:14px 0 6px">📊 Pull health timeline</h3>'));
@@ -1500,10 +1513,12 @@ function renderRoute(){
       <span class="muted" style="font-size:11px">${p.enemy_count}m · ${Math.round(p.estimated_duration_s)}s</span></div>`));
   });
 
-  // Issues
-  const issues = ra.issues||[];
+  // Issues (lust_timing already shown inline with the bloodlust table above)
+  const issues = allIssues.filter(i=>i.category!=='lust_timing');
   if(issues.length){
-    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">⚠️ Issues & recommendations (${ra.issue_counts.critical} critical, ${ra.issue_counts.warning} warnings)</h3>`));
+    const nc=issues.filter(i=>i.severity==='critical').length;
+    const nw=issues.filter(i=>i.severity==='warning').length;
+    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">⚠️ Issues & recommendations (${nc} critical, ${nw} warnings)</h3>`));
     issues.forEach(i=>{
       const sc = i.severity==='critical'?'sev-critical':i.severity==='warning'?'sev-warning':'sev-info';
       const pullTag = i.pull_num?` <span class="muted">(pull ${i.pull_num})</span>`:'';
