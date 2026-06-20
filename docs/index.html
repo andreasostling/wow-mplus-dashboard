@@ -179,6 +179,9 @@ const bucketLabel = {
   needs_review:["Review","b-oneshot"]};
 const el = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild;};
 const esc = (s)=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// Duration in seconds → "Ns" when ≤60, else "m:ss". fmtMargin adds a +/- sign.
+const fmtDur = (s)=>{const a=Math.round(Math.abs(s||0));return a>60?`${Math.floor(a/60)}:${String(a%60).padStart(2,'0')}`:`${a}s`;};
+const fmtMargin = (s)=>((s||0)<0?'-':'+')+fmtDur(s);
 
 // Render one dungeon floor of the off-route map: embedded keystone tiles + context
 // dots (route/skipped packs) + bright markers on the exact overpulled packs.
@@ -627,7 +630,7 @@ render();
     if(!r) return;
     const t = r.timing||{};
     // A: where the time went
-    const marginTxt = t.timer_s ? `${t.margin_s>=0?'+':''}${Math.round(t.margin_s)}s` : 'no timer';
+    const marginTxt = t.timer_s ? fmtMargin(t.margin_s) : 'no timer';
     const mClass = !t.timer_s?'muted':t.margin_s<0?'av-yes':t.margin_s<120?'lever':'av-no';
     box.append(el('<h3 class="muted" style="margin:6px 0 6px">⏱️ Where the time went</h3>'));
     const cards = [['Duration', fmtMin(t.run_duration_s)], ['Timer', t.timer_s?fmtMin(t.timer_s):'—'],
@@ -639,7 +642,7 @@ render();
     box.append(cw);
     if(t.timer_s && t.margin_s<0 && t.death_cost_s>0){
       const deathless = t.timer_s - (t.run_duration_s - t.death_cost_s);
-      box.append(el(`<div class="verdict">Over timer by ${Math.round(-t.margin_s)}s. Deaths cost ${t.death_cost_s}s against the clock — `
+      box.append(el(`<div class="verdict">Over timer by ${fmtDur(t.margin_s)}. Deaths cost ${t.death_cost_s}s against the clock — `
         + (deathless>=0?'<b>a clean run at this pace would have timed.</b>':'even deathless it would have been short.')+'</div>'));
     }
     if((t.boss_times||[]).length)
@@ -667,9 +670,11 @@ render();
             <span class="muted" style="font-size:12px">${Math.round(a.run_dps/1000)}k</span></div>`)); });
       } else {
         box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl} &amp; your SimC ceiling</h3>`));
-        let mx=1; ordered.forEach(n=>{ const s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, s.top12_typical||0, s.dps||0); });
+        // Sort by the typical-+kl logger benchmark (descending), not actual run-DPS.
+        const ordTyp = names.slice().sort((a,b)=>((sims[b]||{}).top12_typical||0)-((sims[a]||{}).top12_typical||0));
+        let mx=1; ordTyp.forEach(n=>{ const s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, s.top12_typical||0, s.dps||0); });
         let anyHot=false;
-        ordered.forEach(n=>{
+        ordTyp.forEach(n=>{
           const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, ceil=s.dps||0;
           const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
           const pctT=top>0?Math.round(100*a.run_dps/top):null;
@@ -810,7 +815,7 @@ function renderRoute(){
   const mClass = t.margin_s<0?'av-yes':t.margin_s<120?'lever':'av-no';
   const fmtMin = (s)=>`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
   box.append(el(`<div class="verdict">
-    <b>Timer:</b> <span class="${mClass}">${t.margin_s>0?'+':''}${Math.round(t.margin_s)}s margin</span>
+    <b>Timer:</b> <span class="${mClass}">${fmtMargin(t.margin_s)} margin</span>
     (est. clear ${fmtMin(t.estimated_clear_s)} / ${fmtMin(t.timer_s)} timer)
     · <b>${t.death_budget}</b> deaths allowed (${t.death_penalty_s||15}s each)
     · group DPS: ${Math.round(t.group_dps_needed||0).toLocaleString()}
