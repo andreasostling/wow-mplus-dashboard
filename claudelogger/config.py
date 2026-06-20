@@ -148,6 +148,16 @@ DUNGEON_SLUGS: dict[str, str] = {
     "Windrunner Spire": "windrunner-spire",
 }
 
+# Raider.IO armory lookups for `talents` (player display name -> region, realm, armory
+# name). Used to refresh routes/overrides/<name>.simc from each player's active loadout.
+# Defaults: the fixed 5-stack's DPS on EU-Doomhammer (healer is not DPS-simmed; the tank
+# keeps a hand-maintained full profile). `talents <name>` also accepts ad-hoc names.
+ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
+    "Stickerduva": ("eu", "doomhammer", "stickerduva"),
+    "Gaddini": ("eu", "doomhammer", "gaddini"),
+    "Decayheat": ("eu", "doomhammer", "decayheat"),
+}
+
 
 @dataclass
 class SimcKnobs:

@@ -29,6 +29,7 @@ convention; **delete a task file when its work is done** (same commit as the cha
 python3 -m claudelogger report <REPORT_CODE> [--fight <ID>]  # one report/fight
 python3 -m claudelogger season [--limit 25]                  # discover + analyze recent
 python3 -m claudelogger briefing "<dungeon substring>"       # print a briefing
+python3 -m claudelogger talents [Name ...] [--refresh]       # refresh routes/overrides/*.simc from Raider.IO active loadouts
 python3 -m claudelogger simc [--dungeon "Xenas"] [--no-sim]  # SimC sims + route analysis (set CLAUDELOGGER_SIMC_BINARY)
 python3 -m py_compile claudelogger/*.py                       # quick syntax check
 ```
@@ -137,7 +138,10 @@ cli simc → fetch (combatantInfo → gear/talents)
 - **WCL combatantInfo has gear but NOT a talent hash.** `talentTree` returns
   `[{id, rank, nodeID}]` (TraitNodeEntryIDs). Reconstructing the Blizzard export hash
   requires a tree-classification lookup we don't have. Use `routes/overrides/<name>.simc`
-  with a `talents=` line from the `/simc` in-game addon instead.
+  with a `talents=` line — either from the `/simc` in-game addon, or auto-pulled by
+  `python3 -m claudelogger talents` from Raider.IO (`armory.py`: the armory web page is a
+  JS SPA with no talent string, but Raider.IO's JSON API exposes the active loadout's
+  import code — browser UA needed, like keystone.guru).
 - **keystone.guru SimC export is UI-only** — no public API. Users must manually export
   from the route page (Simulate button → key level 12 → copy). Files go in `routes/simc/`.
 - **The SimC export drops per-pull `bloodlust=` flags** (always exports `bloodlust=0`,
@@ -166,8 +170,10 @@ cli simc → fetch (combatantInfo → gear/talents)
 - **New simc route** → export from keystone.guru (Simulate button, key 12) and save as
   `routes/simc/<dungeon-slug>.simc`. Add dungeon to `DUNGEON_SLUGS` and `DUNGEON_TIMERS`
   in `config.py`.
-- **Player talent overrides** → `/simc` addon output in `routes/overrides/<name>.simc`.
-  SimC processes lines top-to-bottom, so overrides replace WCL-extracted values.
+- **Player talent overrides** → `/simc` addon output in `routes/overrides/<name>.simc`,
+  or run `python3 -m claudelogger talents` to auto-pull active loadouts from Raider.IO
+  (roster + per-char region/realm in `config.ARMORY_CHARACTERS`). SimC processes lines
+  top-to-bottom, so overrides replace WCL-extracted values.
 - **SimC tunables** → env vars: `CLAUDELOGGER_SIMC_BINARY`, `CLAUDELOGGER_SIMC_KEY_LEVEL`,
   `CLAUDELOGGER_SIMC_ITERATIONS`, `CLAUDELOGGER_SIMC_THREADS`.
 

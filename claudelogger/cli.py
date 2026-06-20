@@ -11,9 +11,9 @@ import sys
 
 import re
 
-from . import fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
+from . import armory, fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
 from .classify import classify_fight
-from .config import Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT
+from .config import ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
 from .wcl import WCLClient
 
@@ -536,6 +536,40 @@ def _emit_simc(
                 print(f"    {warn} warning(s)")
 
 
+def cmd_talents(args) -> int:
+    """Refresh routes/overrides/<name>.simc talents= lines from Raider.IO active loadouts.
+
+    Without names, refreshes the configured roster (ARMORY_CHARACTERS). With names, looks
+    each up in the roster or falls back to <name> on the default/--region/--realm."""
+    cfg = Config.load()
+    overrides_dir = cfg.routes_simc_dir.parent / "overrides"
+    overrides_dir.mkdir(parents=True, exist_ok=True)
+    names = args.players or list(ARMORY_CHARACTERS)
+    rc = 0
+    for disp in names:
+        region, realm, aname = ARMORY_CHARACTERS.get(disp, ("eu", "doomhammer", disp.lower()))
+        if args.region:
+            region = args.region
+        if args.realm:
+            realm = args.realm
+        try:
+            t = armory.fetch_talents(region, realm, aname, cfg.cache_dir, refresh=args.refresh)
+        except Exception as e:  # network / 404 / parse
+            print(f"  talents: {disp}: FAILED ({region}/{realm}/{aname}) — {e}", file=sys.stderr)
+            rc = 1
+            continue
+        if not t.get("loadout_text"):
+            print(f"  talents: {disp}: no active loadout on Raider.IO ({region}/{realm}/{aname})", file=sys.stderr)
+            rc = 1
+            continue
+        path = overrides_dir / f"{disp.lower()}.simc"
+        armory.update_override(path, t["loadout_text"], player=disp, klass=t["class"], spec=t["spec"])
+        print(f"  talents: {disp} ← {t['spec']} {t['class']} (active loadout) → routes/overrides/{path.name}")
+    if rc == 0:
+        print("Done. Re-run 'simc' to sim with the updated talents.")
+    return rc
+
+
 def cmd_briefing(args) -> int:
     """Print a dungeon's pre-run briefing to the terminal (from the last analysis)."""
     import json
@@ -590,6 +624,13 @@ def main(argv: list[str] | None = None) -> int:
     pb = sub.add_parser("briefing", help="Print a dungeon's pre-run briefing (after report/season).")
     pb.add_argument("dungeon", nargs="?", default="", help="Dungeon name (substring match); omit for all.")
     pb.set_defaults(func=cmd_briefing)
+
+    pt = sub.add_parser("talents", help="Refresh routes/overrides/<name>.simc from Raider.IO active loadouts.")
+    pt.add_argument("players", nargs="*", help="Player names (default: configured roster).")
+    pt.add_argument("--region", default=None, help="Override armory region (e.g. eu, us).")
+    pt.add_argument("--realm", default=None, help="Override armory realm (e.g. doomhammer).")
+    pt.add_argument("--refresh", action="store_true", help="Bypass the talents cache and re-fetch.")
+    pt.set_defaults(func=cmd_talents)
 
     args = p.parse_args(argv)
     return args.func(args)
