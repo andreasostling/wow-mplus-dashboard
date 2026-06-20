@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import unittest
 
-from claudelogger import classify, knowledge, mdt, pulls, report, keystone, cd_economy
+from claudelogger import classify, knowledge, mdt, pulls, report, keystone, cd_economy, mapviz
 from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
@@ -478,12 +478,100 @@ class TestKeystone(unittest.TestCase):
         self.assertEqual(keystone.slug_to_name("algethar-academy"), "Algeth'ar Academy")
         self.assertEqual(keystone.slug_to_name("magisters-terrace"), "Magisters' Terrace")
 
-    def test_enemy_npc_regex(self):
-        data = '"id":5,"mapping_version_id":99,"x":1,"npc_id":12345}'
-        self.assertEqual(keystone._ENEMY_NPC.findall(data), [("5", "12345")])
+    def test_balanced_json(self):
+        # Lifts the first array/object after a key by bracket-balancing (order-agnostic).
+        s = 'x="enemies":[{"a":[1,2]},{"a":[]}] tail'
+        self.assertEqual(keystone._balanced_json(s, '"enemies":['), [{"a": [1, 2]}, {"a": []}])
+        self.assertIsNone(keystone._balanced_json(s, '"missing":['))
 
-    def test_enemies_regex(self):
-        self.assertEqual(keystone._ENEMIES.findall('"enemies":[1,2,3]'), ["1,2,3"])
+    def test_parse_enemies(self):
+        data = ('"enemies":[{"id":5,"npc_id":12345,"floor_id":407,"enemy_pack_id":9,'
+                '"lat":-1.5,"lng":2.5},{"id":6,"npc_id":777}]')  # 2nd dropped: no lat
+        got = keystone._parse_enemies(data)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0], {"id": 5, "npc_id": 12345, "floor_id": 407,
+                                  "pack": 9, "lat": -1.5, "lng": 2.5})
+
+    def test_parse_killzones(self):
+        html = '..."killZones":[{"index":1,"enemies":[5,6],"spells":[]},' \
+               '{"index":2,"enemies":[7],"spells":[]}]...'
+        kz = keystone._parse_killzones(html)
+        self.assertEqual([k["index"] for k in kz], [1, 2])
+        self.assertEqual(kz[0]["enemies"], [5, 6])
+
+
+# --------------------------------------------------------------------------
+# off-route map geometry
+# --------------------------------------------------------------------------
+class TestMapviz(unittest.TestCase):
+    def test_leaflet_to_pixel(self):
+        # L.CRS.Simple: pixel = (lng, -lat) * 2**z.
+        self.assertEqual(mapviz.leaflet_to_pixel(-50.0, 100.0, 2), (400.0, 200.0))
+
+    def test_affine_recovers_linear_map(self):
+        # A known affine world->leaflet should be recovered exactly from clean points.
+        f = lambda x, y: (0.5 * x - 0.1 * y + 3, 0.2 * x + 0.4 * y - 7)
+        pts = [(0, 0), (10, 0), (0, 10), (10, 10), (5, 3)]
+        aff = mapviz.Affine.fit([((x, y), f(x, y)) for x, y in pts])
+        for x, y in [(2, 8), (9, 1)]:
+            gx, gy = f(x, y)
+            ax, ay = aff.apply(x, y)
+            self.assertAlmostEqual(ax, gx, places=4)
+            self.assertAlmostEqual(ay, gy, places=4)
+
+    def _route(self):
+        # One floor; npc 100 has two keystone spawns, npc 200 one. Identity-ish transform.
+        return {
+            "floors": [{"id": 1, "index": 1, "name": "F1"}],
+            "enemies": [
+                {"id": 1, "npc_id": 100, "floor_id": 1, "pack": 11, "lat": 0.0, "lng": 0.0, "pull": 1},
+                {"id": 2, "npc_id": 100, "floor_id": 1, "pack": 22, "lat": 0.0, "lng": 50.0, "pull": None},
+                {"id": 3, "npc_id": 200, "floor_id": 1, "pack": 33, "lat": -10.0, "lng": 10.0, "pull": 2},
+                {"id": 4, "npc_id": 300, "floor_id": 1, "pack": 44, "lat": -5.0, "lng": 30.0, "pull": 3},
+            ],
+        }
+
+    def _mobs(self):
+        # world == leaflet here (identity transform), so anchors 100/200/300 align.
+        mk = lambda nid, x, y, ev: {"npc_id": nid, "name": f"n{nid}", "x": x, "y": y,
+                                    "map_id": 70, "events": ev}
+        return {
+            "100": [mk(100, 0, 0, 9)],
+            "200": [mk(200, 10, -10, 9)],
+            "300": [mk(300, 30, -5, 9)],
+            "999": [mk(999, 48, 0, 9)],   # off-route, npc absent from keystone -> approx
+        }
+
+    def test_snap_exact_and_approx(self):
+        route, mobs = self._route(), self._mobs()
+        tr = mapviz.fit_transforms(mobs, route)
+        self.assertIn(70, tr)
+        self.assertEqual(tr[70]["floor_index"], 1)
+        # npc 100 pulled off-route at lng~50 -> snaps to the unselected spawn (pack 22).
+        off = [{"npc_id": 100, "mob": "n100b"}, {"npc_id": 999, "mob": "stray"}]
+        # move the 100 spawn near the second keystone instance (lng 50).
+        mobs["100"][0]["x"], mobs["100"][0]["y"] = 50, 0
+        snapped = {s["npc_id"]: s for s in mapviz.snap_off_route(off, mobs, route, tr)}
+        self.assertTrue(snapped[100]["exact"])
+        self.assertEqual(snapped[100]["pack"], 22)
+        # npc 999 isn't in keystone -> approx placement at the transformed point, no pack.
+        self.assertFalse(snapped[999]["exact"])
+        self.assertIsNone(snapped[999]["pack"])
+        self.assertIsNotNone(snapped[999]["lat"])
+        self.assertEqual(snapped[999]["events"], 9)
+
+    def test_snap_matches_variant_by_name(self):
+        # A pulled mob with a *variant* npc_id (888) but the same name as keystone's 200
+        # ("n200") should snap to npc 200's pack by name, since npc_id won't match.
+        route, mobs = self._route(), self._mobs()
+        mobs["888"] = [{"npc_id": 888, "name": "n200", "x": 10, "y": -10,
+                        "map_id": 70, "events": 50}]
+        tr = mapviz.fit_transforms(mobs, route)
+        snapped = {s["npc_id"]: s
+                   for s in mapviz.snap_off_route([{"npc_id": 888, "mob": "n200"}], mobs, route, tr)}
+        self.assertTrue(snapped[888]["exact"])
+        self.assertEqual(snapped[888]["match"], "name")
+        self.assertEqual(snapped[888]["pack"], 33)
 
 
 # --------------------------------------------------------------------------

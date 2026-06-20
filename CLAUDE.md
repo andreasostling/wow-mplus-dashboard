@@ -77,7 +77,8 @@ cli simc → fetch (combatantInfo → gear/talents)
 | `fetch.py` | Report metadata, actors, per-fight event streams (paginated), roles (`playerDetails`), healer mana (`fetch_healer_mana`), `resolve_ability_name`, `discover_reports`. |
 | `knowledge.py` | `AbilityKnowledge` (empirical interruptible spells + CC-able NPCs from logs); `COMP_CC_SEED` (player CC by spell id → kind); `is_hard_cc`/`ENEMY_HARD_CC_AURAS`; `is_fixate`/`ENEMY_FIXATE_AURAS`; MDT seam (`load_mdt`). |
 | `mdt.py` | Fetch + parse MDT dungeon `.lua`: global `{spell_id: interruptible}` and per-NPC `{name, interruptible, spells}`. |
-| `keystone.py` | Resolve keystone.guru route short-codes → set of route `npc_id`s (`DEFAULT_ROUTES`, override via `routes.json`). |
+| `keystone.py` | Resolve keystone.guru route short-codes → route `npc_id`s + the **full enemy table** (`{id, npc_id, floor_id, pack, lat, lng, pull}`), `floors` (`{id, index, name}`), `dungeon_key`, `expansion` (`DEFAULT_ROUTES`, override via `routes.json`). The enemy `lat`/`lng` are keystone leaflet coords; `pull` = the route killZone that selects that instance (None = off route). |
+| `mapviz.py` | Pin overpulled (off-route) mobs onto the actual keystone route map. Fits a per-floor world→leaflet `Affine` (least-squares, pure-stdlib `_solve3`) from mobs shared between the combat log and the route, pairs each combat-log uiMapID to the keystone `floor_id` with the best fit, then `snap_off_route` snaps each off-route mob (via the affine) to the nearest keystone enemy of the same npc_id → **exact pack/pull** (else affine-positioned "approx" when the npc_id isn't in keystone). `leaflet_to_pixel` + `fetch_floor_tiles` (cached, base64) build the embedded-tile render. |
 | `defensives.py` | `PERSONAL_DEFENSIVES`, `EXTERNAL_DEFENSIVES`, `CLASS_BASELINE` tables. |
 | `pulls.py` | `segment_pulls` (combat segments via NPC-activity gaps) + `pull_cc_tally` (interrupt demand vs supply, `cc_starved`). |
 | `classify.py` | The core: HP reconstruction, damage-window attribution, cause buckets, healer/defensive checks, melee threat/fixate split, wipe detection. Returns `(findings, pull_tallies)`. Tags deaths with `dangerous_cast` when the lethal cast is a flagged high-damage cast. |
@@ -106,6 +107,25 @@ cli simc → fetch (combatantInfo → gear/talents)
   id lists + name keywords (`is_hard_cc`, `is_fixate`).
 - **keystone.guru needs browser headers** (User-Agent + Accept) or Cloudflare 403s. The
   per-dungeon enemy→npc map is in `<version>/facade.js` **or** `<version>/split_floors.js`.
+- **keystone enemy positions + map tiles (off-route map, `mapviz.py`):** the data file's
+  `enemies[]` carry `lat`/`lng` (keystone leaflet coords), `floor_id`, `enemy_pack_id`.
+  Map tiles live at `assets.keystone.guru/tiles/{expansion.shortname}/{dungeon.key}/{floor.index}/{z}/{x}_{y}.png`
+  (needs `Referer: https://keystone.guru/`). **Tiles are 384×256 px (NOT square)**, in a
+  `2**z × 2**z` grid (z=2 = full floor). Under `L.CRS.Simple` the leaflet→pixel map is
+  exactly `pixel = (lng, -lat) * 2**z`, so a floor image is `(384·2**z)×(256·2**z)`. The
+  dungeon `key` (underscored, e.g. `nexus_point_xenas`) ≠ the URL slug (`nexuspoint-xenas`).
+  **facade vs split:** facade-mode routes put every floor's enemies on one merged facade
+  floor (a single wide tile set); split mode is per-real-floor. `fit_transforms` handles
+  both by pairing each combat-log uiMapID to whichever keystone `floor_id` fits best.
+- **Off-route npc_ids often aren't in keystone.** The combat log's pulled mob can be a
+  *variant* npc_id (e.g. Phantasmal Mystic 234061 vs the route's 232146) or a summoned add
+  — keystone lists neither. `snap_off_route` handles this in two tiers: (1) exact match by
+  npc_id, then by **name** (combat-log names bridge variant ids) → red marker at keystone's
+  own coords + pack id; (2) for a *real* pull (events ≥ `APPROX_MIN_EVENTS`) keystone can't
+  name at all (e.g. Skyreach's boss-area Solar Zealots) → orange-dashed **approximate**
+  marker at the affine point. Stray 1–4-event tags and unplaceable adds stay text-only.
+  Facade-mode dungeons (Skyreach) fit a rougher affine (higher residual), so their approx
+  markers are area-accurate, not pixel-accurate — surfaced via the carried `residual`.
 - **MDT enemy `["id"]` is the npc_id**; spells are `["spells"]={[spellId]={["interruptible"]=true}}`.
   Spell *names* aren't in MDT — resolve from logs or `fetch.resolve_ability_name`.
 - **WCL combatantInfo has gear but NOT a talent hash.** `talentTree` returns

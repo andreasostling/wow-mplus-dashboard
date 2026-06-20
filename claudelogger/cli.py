@@ -95,6 +95,10 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
         entry["stop_threats"].sort(key=lambda t: t["mob"])
         entry["npc_ids"] = r.get("npc_ids", [])   # needed by _merge_route_info off-route detection
         entry["n_npcs"] = len(r.get("npc_ids", []))
+        # Enemy positions + map metadata for the off-route map (pinning overpulls onto
+        # the keystone route map). Absent on routes cached before this was added.
+        for k in ("enemies", "floors", "dungeon_key", "expansion"):
+            entry[k] = r.get(k)
         info.append(entry)
     return info
 
@@ -279,7 +283,8 @@ def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None,
     if log_positions:
         print(f"combat log: positions for {len(log_positions)} dungeon run(s) "
               f"({combatlog.find_archive()})", file=sys.stderr)
-    briefings = report.build_dungeon_briefings(runs, route_info, log_positions, public_danger, guide_data)
+    briefings = report.build_dungeon_briefings(runs, route_info, log_positions, public_danger,
+                                               guide_data, cache_dir=cfg.cache_dir)
     jpath = report.write_json(cfg.out_dir, season, runs, briefings)
     hpath = report.write_html(cfg.out_dir, season, runs, briefings)
     report.write_html_artifact(cfg.out_dir, season, runs, briefings)

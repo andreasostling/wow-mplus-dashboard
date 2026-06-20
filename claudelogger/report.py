@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import combatlog
+from . import combatlog, mapviz
 from .classify import AVOIDABLE_BUCKETS, INTERRUPT, STUN, DeathFinding
 from .knowledge import COMP_CC_SEED, comp_cc_kit
 
@@ -176,7 +176,8 @@ def _counter_for(t: dict) -> tuple[str, str, str]:
 def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = None,
                             log_positions: dict | None = None,
                             public_danger: dict | None = None,
-                            guide_data: dict | None = None) -> dict[str, Any]:
+                            guide_data: dict | None = None,
+                            cache_dir: Path | None = None) -> dict[str, Any]:
     by_dungeon: dict[str, list[dict]] = defaultdict(list)
     for r in runs:
         by_dungeon[r["dungeon"]].append(r)
@@ -298,7 +299,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         }
 
     if route_info:
-        _merge_route_info(out, route_info, by_dungeon, log_positions)
+        _merge_route_info(out, route_info, by_dungeon, log_positions, cache_dir)
     # Route-only dungeons (no logged runs) get empty comp lists from _empty_briefing —
     # backfill them with the comp's spec-based kit so "Your CC" is never blank.
     for b in out.values():
@@ -351,9 +352,93 @@ def _empty_briefing(name: str) -> dict[str, Any]:
             "danger_source": "", "danger_meta": {}, "guide_abilities": [], "guide_url": ""}
 
 
+_MAP_ZOOM = 2  # full-floor keystone tiles: a 4×4 grid, 1024 px square per floor.
+
+
+def _build_offroute_map(deduped: list[dict], mobs: dict, route: dict,
+                        cache_dir: Path) -> dict[str, Any] | None:
+    """Pin the overpulled mobs onto the actual keystone route map.
+
+    Snaps each off-route mob (via the world→leaflet affine) to the exact keystone enemy
+    instance + pack it was, annotates the ``deduped`` entries in place with that, and
+    builds a per-floor render structure (embedded keystone tiles + marker pixels + faint
+    route/skip context dots). Returns None if the route lacks position data, no transform
+    could be fit, or nothing maps."""
+    if not route.get("enemies") or not route.get("dungeon_key") or not route.get("expansion"):
+        return None
+    transforms = mapviz.fit_transforms(mobs, route)
+    if not transforms:
+        return None
+    snapped = mapviz.snap_off_route(deduped, mobs, route, transforms)
+    by_npc = {s["npc_id"]: s for s in snapped}
+    # A mob goes on the map if either (a) we pinned it to a real keystone pack — by
+    # npc_id, or by name for variants — using keystone's own reliable coords; or (b) it
+    # was a *real* off-route pull (sustained combat) that keystone simply doesn't chart,
+    # in which case we place it approximately at its affine-transformed combat-log point.
+    # Stray 1–4-event tags and summoned adds keystone can't name stay in the text list.
+    mapped = lambda s: s and s["lat"] is not None and (
+        s["exact"] or s.get("events", 0) >= mapviz.APPROX_MIN_EVENTS)
+    floors_used: set[int] = set()
+    for o in deduped:
+        s = by_npc.get(int(o["npc_id"]))
+        if s and s["lat"] is not None:
+            o["snap"] = {k: s.get(k) for k in
+                         ("floor_index", "pack", "on_route_pull", "snap_yd", "exact", "match", "residual")}
+            o["snap"]["mapped"] = mapped(s)
+            if mapped(s):
+                floors_used.add(s["floor_index"])
+    if not floors_used:
+        return None
+
+    s = 2 ** _MAP_ZOOM
+    img_w, img_h = mapviz.TILE_W * s, mapviz.TILE_H * s
+    fname = {f["index"]: f["name"] for f in route.get("floors") or []}
+    # On-route vs skippable enemy dots, per floor, for context behind the markers.
+    route_pts: dict[int, list] = defaultdict(list)
+    skip_pts: dict[int, list] = defaultdict(list)
+    fidx = {f["id"]: f["index"] for f in route.get("floors") or []}
+    for e in route["enemies"]:
+        fi = fidx.get(e["floor_id"])
+        if fi not in floors_used:
+            continue
+        px, py = mapviz.leaflet_to_pixel(e["lat"], e["lng"], _MAP_ZOOM)
+        (route_pts if e.get("pull") is not None else skip_pts)[fi].append([round(px), round(py)])
+
+    floors_out: list[dict] = []
+    for fi in sorted(floors_used):
+        marks = []
+        seen_marks: set[int] = set()  # one marker per npc_id (it repeats across pulls)
+        for s in snapped:
+            if not mapped(s) or s["floor_index"] != fi or s["npc_id"] in seen_marks:
+                continue
+            seen_marks.add(s["npc_id"])
+            px, py = mapviz.leaflet_to_pixel(s["lat"], s["lng"], _MAP_ZOOM)
+            marks.append({
+                "px": round(px), "py": round(py), "mob": s.get("mob") or f"NPC #{s['npc_id']}",
+                "pack": s.get("pack"), "pull": s.get("on_route_pull"),
+                "snap_yd": s.get("snap_yd"), "match": s.get("match"),
+                "exact": bool(s.get("exact")),
+            })
+        if not marks:
+            continue
+        tiles = mapviz.fetch_floor_tiles(cache_dir, route["expansion"], route["dungeon_key"], fi, _MAP_ZOOM)
+        floors_out.append({
+            "floor_index": fi, "name": fname.get(fi, ""),
+            "w": img_w, "h": img_h, "tw": mapviz.TILE_W, "th": mapviz.TILE_H,
+            "tiles": [{"x": x, "y": y, "uri": mapviz.tile_data_uri(png)}
+                      for (x, y), png in sorted(tiles.items())],
+            "route_pts": route_pts.get(fi, []), "skip_pts": skip_pts.get(fi, []),
+            "marks": marks,
+        })
+    if not floors_out:
+        return None
+    return {"zoom": _MAP_ZOOM, "floors": floors_out}
+
+
 def _merge_route_info(out: dict[str, Any], route_info: list[dict],
                       by_dungeon: dict[str, list[dict]] | None = None,
-                      log_positions: dict | None = None) -> None:
+                      log_positions: dict | None = None,
+                      cache_dir: Path | None = None) -> None:
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     bnorms = {d: norm(d) for d in out}
     for r in route_info:
@@ -434,11 +519,21 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
         deduped = [o for o in deduped
                    if (o.get("mob") or "").strip().lower() not in combatlog.IGNORED_OFF_ROUTE_NAMES]
 
+        # Pin the overpulled mobs onto the actual keystone route map (exact pack/pull),
+        # and build the embedded-tile render structure. Needs the local combat log for
+        # the world→leaflet transform and the enriched route (enemy positions).
+        offroute_map = None
+        if cache_dir and deduped:
+            _entry = combatlog.for_dungeon(log_positions or {}, match)
+            if _entry and _entry.get("mobs"):
+                offroute_map = _build_offroute_map(deduped, _entry["mobs"], r, cache_dir)
+
         out[match]["route"] = {
             "label": r["label"], "code": r["code"], "pulls": r.get("pulls", 0),
             "n_npcs": r.get("n_npcs", 0), "ok": r.get("ok", False),
             "error": r.get("error", ""), "kick_targets": kick_targets,
             "stop_targets": stop_targets, "off_route_mobs": deduped,
+            "offroute_map": offroute_map,
         }
 
 
@@ -723,6 +818,31 @@ const bucketLabel = {
 const el = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild;};
 const esc = (s)=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
+// Render one dungeon floor of the off-route map: embedded keystone tiles + context
+// dots (route/skipped packs) + bright markers on the exact overpulled packs.
+function offrouteFloorSvg(f){
+  const tiles = f.tiles.map(t=>`<image href="${t.uri}" x="${t.x*f.tw}" y="${t.y*f.th}" width="${f.tw}" height="${f.th}"/>`).join('');
+  const dots = (pts,fill,op)=>pts.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="${fill}" fill-opacity="${op}"/>`).join('');
+  const marks = f.marks.map(mk=>{
+    const variant = mk.match==='name';
+    const col = mk.exact ? '#ff3030' : '#ff9c2f';
+    const tip = mk.exact
+      ? `${mk.mob} — keystone pack ${mk.pack}${variant?' (matched by name — variant npc id)':''}${mk.snap_yd!=null?` · ~${mk.snap_yd} off`:''}`
+      : `${mk.mob} — approximate (not on keystone map; placed from combat log)`;
+    const lab = esc(mk.mob) + (mk.exact&&mk.pack?` <tspan fill="#bbb">#${mk.pack}${variant?'~':''}</tspan>`:'');
+    const ring = `<circle cx="${mk.px}" cy="${mk.py}" r="17" fill="none" stroke="${col}" stroke-width="4"${mk.exact?'':' stroke-dasharray="6 5"'}/>`;
+    return `<g><title>${esc(tip)}</title>${ring}`
+      +`<circle cx="${mk.px}" cy="${mk.py}" r="6" fill="${col}"/>`
+      +`<text x="${mk.px+22}" y="${mk.py+8}" font-size="24" font-weight="600" fill="#fff" `
+      +`stroke="#000" stroke-width="4" paint-order="stroke" style="stroke-linejoin:round">${lab}</text></g>`;
+  }).join('');
+  const cap = f.name ? `<div class="contrib" style="margin:2px 0 6px">${esc(f.name)}</div>` : '';
+  return `<div style="margin:4px 0 10px">${cap}<svg viewBox="0 0 ${f.w} ${f.h}" `
+    +`style="width:100%;max-width:720px;border:1px solid var(--line);border-radius:8px;background:#0c1016;display:block" `
+    +`preserveAspectRatio="xMidYMid meet">${tiles}`
+    +`${dots(f.skip_pts||[],'#8a8a8a',0.35)}${dots(f.route_pts||[],'#4caf50',0.55)}${marks}</svg></div>`;
+}
+
 // ---- Tabs ----
 document.querySelectorAll('#tabs .tab').forEach(btn=>{
   btn.onclick=()=>{
@@ -937,33 +1057,42 @@ function renderBriefing(){
     apply();
   }
   if(rt){
-    // off-route mobs
+    // off-route mobs — pinned onto the actual keystone route map where possible.
     const offRoute = rt.off_route_mobs || [];
     if(offRoute.length){
-      // Aggregate: count how many pulls each mob appeared in.
-      const mobPulls = {};
+      // Aggregate per mob: pulls it showed in + the snapped keystone pack/floor.
+      const mobInfo = {};
       offRoute.forEach(o => {
-        if(!mobPulls[o.mob]) mobPulls[o.mob] = {npc_id:o.npc_id, pulls:[], pos:o.pos};
-        if(o.pull!=null) mobPulls[o.mob].pulls.push(o.pull);
-        if(o.pos) mobPulls[o.mob].pos = o.pos;
+        if(!mobInfo[o.mob]) mobInfo[o.mob] = {npc_id:o.npc_id, pulls:[], snap:o.snap};
+        if(o.pull!=null) mobInfo[o.mob].pulls.push(o.pull);
+        if(o.snap) mobInfo[o.mob].snap = o.snap;
       });
-      const sorted = Object.entries(mobPulls).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
-      const anyPos = sorted.some(([,i])=>i.pos);
+      const sorted = Object.entries(mobInfo).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
       box.append(el(`<h3 class="muted" style="margin:16px 0 6px">⚠️ Off-route mobs — pulled but not on your planned route</h3>`));
-      if(anyPos) box.append(el('<div class="contrib" style="margin:-2px 0 6px">Exact spawn location from your local combat log — located relative to the nearest on-route mob.</div>'));
-      const otbl=el(`<table><thead><tr><th>Mob</th><th>Pull #(s)</th>${anyPos?'<th>Where (from combat log)</th>':''}<th>Wowhead</th></tr></thead><tbody></tbody></table>`);
+      const m = rt.offroute_map;
+      if(m && m.floors && m.floors.length){
+        box.append(el('<div class="contrib" style="margin:-2px 0 8px">Overpulled mobs pinned onto the keystone.guru map (from your combat log). '
+          +'<span style="color:#ff3030">●</span> keystone pack · <span style="color:#ff9c2f">◌</span> approximate (not on keystone map) · '
+          +'<span style="color:#4caf50">●</span> your route · <span style="color:#8a8a8a">●</span> skipped packs.</div>'));
+        m.floors.forEach(f => box.append(el(offrouteFloorSvg(f))));
+      }
+      // Which pack list (keystone-snapped) + spawned adds with no map location.
+      const otbl=el('<table><thead><tr><th>Mob</th><th>Pull #(s)</th><th>Where</th><th>Wowhead</th></tr></thead><tbody></tbody></table>');
       const ob=otbl.querySelector('tbody');
       sorted.forEach(([mob, info])=>{
         const pullNums = info.pulls.length ? info.pulls.map(p=>`#${p}`).join(', ') : '<span class="muted">log</span>';
-        const whLink = `<a href="https://www.wowhead.com/npc=${info.npc_id}" target="_blank" rel="noopener">map ↗</a>`;
-        let where = '<span class="muted">—</span>';
-        if(info.pos){
-          const p = info.pos;
-          const nearTxt = p.near ? `~${p.near_yd} yd from <b>${esc(p.near)}</b>` : 'no on-route anchor';
-          where = `<span title="world (${p.x}, ${p.y}) · uiMap ${p.map_id} · ${p.spawns} spawn(s) engaged">${nearTxt} <span class="muted">(${p.x}, ${p.y})</span></span>`;
+        const whLink = `<a href="https://www.wowhead.com/npc=${info.npc_id}" target="_blank" rel="noopener">npc ↗</a>`;
+        let where = '<span class="muted" title="summoned add or npc not on the keystone map — not a route-avoidable pull">add / not on route map</span>';
+        const s = info.snap;
+        if(s && s.exact){
+          const fl = (s.floor_index && s.floor_index>1) ? ` <span class="muted">(floor ${s.floor_index})</span>` : '';
+          const variant = s.match==='name' ? ' <span class="muted" title="matched by name — combat log used a variant npc id">(variant)</span>' : '';
+          where = `<span title="keystone pack ${s.pack}${s.snap_yd!=null?' · ~'+s.snap_yd+' off':''}">keystone pack <b>${s.pack}</b>${fl}${variant}</span>`;
+        } else if(s && s.mapped){
+          const fl = (s.floor_index>1) ? ` <span class="muted">(floor ${s.floor_index})</span>` : '';
+          where = `<span class="muted" title="not on the keystone map — placed approximately from your combat log${s.residual!=null?' (fit residual '+s.residual+')':''}">≈ approximate${fl}</span>`;
         }
-        const posCell = anyPos ? `<td class="contrib">${where}</td>` : '';
-        ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td>${posCell}<td>${whLink}</td></tr>`));
+        ob.append(el(`<tr><td><span class="av-yes">${esc(mob)}</span></td><td class="contrib">${pullNums}</td><td class="contrib">${where}</td><td>${whLink}</td></tr>`));
       });
       box.append(otbl);
     }

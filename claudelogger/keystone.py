@@ -50,36 +50,92 @@ def _is_lust_spell(spell: dict[str, Any]) -> bool:
     return any(h in icon for h in _LUST_ICON_HINTS)
 
 
-def _extract_lust_pulls(html: str) -> list[int]:
-    """Pull indices whose killZone carries a lust-family spell, from the embedded
-    killZones JSON. Best-effort: returns [] if the structure isn't found/parses."""
-    key = '"killZones":['
-    i = html.find(key)
+def _balanced_json(text: str, key: str) -> Any | None:
+    """Extract the JSON value (array or object) that immediately follows ``key`` in
+    ``text``, by bracket-balancing from the opening ``[``/``{``. Returns the parsed
+    value, or ``None`` if the key is absent or the slice doesn't parse. Used to lift
+    the embedded ``killZones``/``enemies``/``floors`` structures out of the page and
+    data file without depending on field order."""
+    i = text.find(key)
     if i < 0:
-        return []
-    j = i + len(key) - 1  # at the '['
+        return None
+    j = i + len(key) - 1  # at the opening bracket
+    open_c = text[j]
+    close_c = "]" if open_c == "[" else "}"
     depth = 0
-    for k in range(j, len(html)):
-        c = html[k]
-        if c == "[":
+    for k in range(j, len(text)):
+        c = text[k]
+        if c == open_c:
             depth += 1
-        elif c == "]":
+        elif c == close_c:
             depth -= 1
             if depth == 0:
                 try:
-                    arr = json.loads(html[j:k + 1])
+                    return json.loads(text[j:k + 1])
                 except ValueError:
-                    return []
-                pulls = sorted({kz["index"] for kz in arr
-                                if isinstance(kz, dict) and isinstance(kz.get("index"), int)
-                                and any(_is_lust_spell(s) for s in (kz.get("spells") or []))})
-                return pulls
-    return []
+                    return None
+    return None
 
 
-_ENEMIES = re.compile(r'"enemies":\[([0-9,]+)\]')
+def _parse_killzones(html: str) -> list[dict[str, Any]]:
+    """The route's pulls, in order. Each: ``{index, enemies:[enemy_id], lat, lng,
+    floor_id, lust}``. ``enemies`` are keystone enemy *instance* ids (not npc ids)."""
+    arr = _balanced_json(html, '"killZones":[') or []
+    out: list[dict[str, Any]] = []
+    for kz in arr:
+        if not isinstance(kz, dict) or not isinstance(kz.get("index"), int):
+            continue
+        out.append({
+            "index": kz["index"],
+            "enemies": [int(e) for e in (kz.get("enemies") or [])],
+            "lat": kz.get("lat"), "lng": kz.get("lng"), "floor_id": kz.get("floor_id"),
+            "lust": any(_is_lust_spell(s) for s in (kz.get("spells") or [])),
+        })
+    return out
+
+
+_ENEMY_FIELDS = ("id", "npc_id", "floor_id", "enemy_pack_id", "lat", "lng")
+
+
+def _parse_enemies(data: str) -> list[dict[str, Any]]:
+    """Every enemy instance on the map, from the data file's ``enemies`` array.
+    Each: ``{id, npc_id, floor_id, pack, lat, lng}`` (keystone leaflet coords)."""
+    arr = _balanced_json(data, '"enemies":[') or []
+    out: list[dict[str, Any]] = []
+    for e in arr:
+        if not isinstance(e, dict) or e.get("npc_id") is None or e.get("lat") is None:
+            continue
+        out.append({
+            "id": e.get("id"), "npc_id": e.get("npc_id"), "floor_id": e.get("floor_id"),
+            "pack": e.get("enemy_pack_id"),
+            "lat": e.get("lat"), "lng": e.get("lng"),
+        })
+    return out
+
+
+# Floor table sits just before the dungeon's slug; the dungeon key + expansion
+# shortname (needed to build keystone tile URLs) sit just before the floor table.
+_FLOORS = re.compile(r'"floors":(\[.*?\])', re.S)
+_DUNGEON_KEY = re.compile(r'"dungeon":\{[^{}]*?"key":"([a-z0-9_]+)"')
+_EXPANSION = re.compile(r'"expansion":\{[^{}]*?"shortname":"([a-z0-9_]+)"')
+
+
+def _parse_floors(html: str) -> list[dict[str, Any]]:
+    """Floor table: ``[{id, index, name}]``. ``index`` is the tile-URL floor segment."""
+    arr = _balanced_json(html, '"floors":[') or []
+    out: list[dict[str, Any]] = []
+    for f in arr:
+        if isinstance(f, dict) and f.get("id") is not None and f.get("index") is not None:
+            out.append({"id": f["id"], "index": f["index"], "name": f.get("name") or ""})
+    return out
+
+
+def _extract_lust_pulls(html: str) -> list[int]:
+    """Pull indices whose killZone carries a lust-family spell."""
+    return sorted({kz["index"] for kz in _parse_killzones(html) if kz["lust"]})
+
+
 _DATA_FILE = re.compile(r'(https://assets\.keystone\.guru/[^"\']+/mapcontext/data/[a-z0-9-]+/\d+/(?:facade|split_floors)\.js)')
-_ENEMY_NPC = re.compile(r'"id":(\d+),"mapping_version_id":\d+,(?:(?!"id":).)*?"npc_id":(\d+)', re.S)
 _SLUG = re.compile(r'/route/([a-z0-9-]+)/')
 
 
@@ -116,23 +172,35 @@ def fetch_route(label: str, code: str, cache_dir: Path, *, refresh: bool = False
     out["slug"] = m.group(1) if m else ""
     out["dungeon"] = slug_to_name(out["slug"]) if out["slug"] else label
 
-    enemy_ids: set[int] = set()
-    pulls = 0
-    for em in _ENEMIES.finditer(html):
-        pulls += 1
-        enemy_ids |= {int(x) for x in em.group(1).split(",") if x}
-    out["pulls"] = pulls
-    out["lust_pulls"] = _extract_lust_pulls(html)
+    # The route's pulls (ordered) and which enemy *instances* each one selects.
+    killzones = _parse_killzones(html)
+    out["pulls"] = len(killzones)
+    out["lust_pulls"] = sorted({kz["index"] for kz in killzones if kz["lust"]})
+    route_enemy_ids: set[int] = {e for kz in killzones for e in kz["enemies"]}
+    # enemy instance id -> the pull number that selects it (for map labelling).
+    enemy_pull = {e: kz["index"] for kz in killzones for e in kz["enemies"]}
+
+    # Map background metadata (for keystone tile URLs) + the full floor table.
+    out["floors"] = _parse_floors(html)
+    km = _DUNGEON_KEY.search(html)
+    out["dungeon_key"] = km.group(1) if km else ""
+    em = _EXPANSION.search(html)
+    out["expansion"] = em.group(1) if em else ""
 
     df = _DATA_FILE.search(html)
-    npc_ids: set[int] = set()
+    enemies: list[dict[str, Any]] = []
     if df:
         try:
-            data = _get(df.group(1))
-            e2n = {int(a): int(b) for a, b in _ENEMY_NPC.findall(data)}
-            npc_ids = {e2n[e] for e in enemy_ids if e in e2n}
+            enemies = _parse_enemies(_get(df.group(1)))
         except (urllib.error.URLError, urllib.error.HTTPError) as e:
             out["error"] = f"data file: {e}"
+    # Tag each enemy instance with the route pull that selects it (None = off route).
+    for e in enemies:
+        e["pull"] = enemy_pull.get(e["id"])
+    out["enemies"] = enemies
+
+    e2n = {e["id"]: e["npc_id"] for e in enemies}
+    npc_ids = {e2n[e] for e in route_enemy_ids if e in e2n}
     out["npc_ids"] = sorted(npc_ids)
     out["ok"] = bool(npc_ids)
     if not npc_ids and "error" not in out:
