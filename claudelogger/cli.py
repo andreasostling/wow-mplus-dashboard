@@ -491,6 +491,12 @@ def _emit_simc(
             hpath = report.write_html(cfg.out_dir, season, runs, briefings, simc_data)
             report.write_html_artifact(cfg.out_dir, season, runs, briefings, simc_data)
             print(f"Dashboard: {hpath}")
+            # Refresh the published Pages copy too (the simc dashboard is the most
+            # complete one — death analysis + SimC + routes). Mirrors _emit's copy.
+            docs_index = REPO_ROOT / "docs" / "index.html"
+            if docs_index.parent.exists():
+                shutil.copyfile(hpath, docs_index)
+                print(f"Pages copy: {docs_index} (commit & push to update the live site)")
         except (json.JSONDecodeError, OSError, TypeError):
             pass
 
