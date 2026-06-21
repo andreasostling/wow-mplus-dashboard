@@ -36,23 +36,26 @@ from .fetch import Fight, FightEvents, ReportData
 # genuine finding (→ "⚠ never/rarely pressed" warning). `core=False` = talent-gated or
 # situational (most tank offensive CDs, secondary talents); a 0 there just means the talent
 # wasn't taken, so it stays the neutral "not seen" — we never warn-on-zero for those.
+#
+# `core` is now only the FALLBACK for runs whose WCL combatantInfo (and thus talentTree)
+# is missing. When talents ARE known (the usual case), CD_TALENT_ENTRIES below lets us
+# check the talent directly: a CD whose talent the player actually took, then never/rarely
+# pressed, is warned regardless of `core`; one they didn't take is silently "not talented".
+# So `core=True` marks each spec's PRIMARY signature burst (warn even without talent data);
+# tank, secondary, and mutually-exclusive-alternative CDs stay core=False.
 OFFENSIVE_CDS: dict[str, list[tuple[int, str, int, bool]]] = {
-    "monk:brewmaster": [(132578, "Invoke Niuzao, the Black Ox", 120, False)],  # tank, talented
+    "monk:brewmaster": [(132578, "Invoke Niuzao, the Black Ox", 120, False)],  # tank
     "mage:frost": [(84714, "Frozen Orb", 60, True), (205021, "Ray of Frost", 60, False)],
     "rogue:subtlety": [(121471, "Shadow Blades", 90, True), (280719, "Secret Technique", 25, False)],
     "warlock:demonology": [(265187, "Summon Demonic Tyrant", 60, True)],
     "warlock:destruction": [(1122, "Summon Infernal", 120, True)],
     # Restoration Druid (healer) — no offensive cooldowns tracked.
     # --- All-class coverage. Ids + base cooldowns verified via `simc spell_query` against
-    #     build 12.0.7. `core=True` is reserved for signature bursts with NO common
-    #     passive-conversion, mutually-exclusive-talent, or tank-optional caveat — anything
-    #     where a 0 could be correct play would mis-fire the never-pressed warning, so
-    #     several signature bursts are deliberately core=False (cadence shown, never warned).
-    #     Pure healer specs are omitted (no offensive burst this tool needs).
-    "warrior:arms": [(107574, "Avatar", 90, False), (167105, "Colossus Smash", 45, False)],  # Warbreaker replaces CS; Avatar talented
+    #     build 12.0.7; pure healer specs omitted (no offensive burst this tool needs).
+    "warrior:arms": [(107574, "Avatar", 90, True), (167105, "Colossus Smash", 45, False)],
     "warrior:fury": [(1719, "Recklessness", 90, True), (107574, "Avatar", 90, False)],
     "warrior:protection": [(107574, "Avatar", 90, False)],  # tank
-    "paladin:retribution": [(31884, "Avenging Wrath", 120, False)],  # Radiant Glory converts AW to a passive
+    "paladin:retribution": [(31884, "Avenging Wrath", 120, True)],
     "paladin:protection": [(31884, "Avenging Wrath", 120, False)],  # tank
     "deathknight:frost": [(51271, "Pillar of Frost", 45, True)],
     "deathknight:unholy": [(1233448, "Dark Transformation", 45, True)],
@@ -62,19 +65,61 @@ OFFENSIVE_CDS: dict[str, list[tuple[int, str, int, bool]]] = {
     "hunter:survival": [(360952, "Coordinated Assault", 120, False)],  # absent from MID1 profile — cadence only
     "demonhunter:havoc": [(191427, "Metamorphosis", 120, True), (198013, "Eye Beam", 30, True)],
     "demonhunter:vengeance": [(187827, "Metamorphosis", 120, False)],  # tank
-    "druid:balance": [(194223, "Celestial Alignment", 180, False)],  # Incarnation overrides the button
+    "druid:balance": [(194223, "Celestial Alignment", 180, True)],
     "druid:feral": [(5217, "Tiger's Fury", 30, True), (106951, "Berserk", 180, False)],  # Incarnation overrides Berserk
     "druid:guardian": [(50334, "Berserk", 180, False)],  # tank
     "mage:arcane": [(365350, "Arcane Surge", 90, True)],
     "mage:fire": [(190319, "Combustion", 120, True)],
-    "priest:shadow": [(228260, "Voidform", 120, False), (391109, "Dark Ascension", 60, False)],  # mutually-exclusive talents
-    "shaman:elemental": [(191634, "Stormkeeper", 60, False), (198067, "Fire Elemental", 120, False)],  # build variance
+    "priest:shadow": [(228260, "Voidform", 120, True), (391109, "Dark Ascension", 60, False)],  # take one or the other
+    "shaman:elemental": [(191634, "Stormkeeper", 60, True), (198067, "Fire Elemental", 120, False)],
     "shaman:enhancement": [(51533, "Feral Spirit", 90, True), (384352, "Doom Winds", 60, False)],
     "evoker:devastation": [(375087, "Dragonrage", 120, True)],
     "monk:windwalker": [(123904, "Invoke Xuen, the White Tiger", 120, True)],
     "rogue:assassination": [(360194, "Deathmark", 120, True)],
     "rogue:outlaw": [(13750, "Adrenaline Rush", 180, True)],
     "warlock:affliction": [(205180, "Summon Darkglare", 120, True)],
+}
+
+# Talent presence: spell_id → the TraitNodeEntryID(s) that grant it, extracted from
+# SimC's `trait_data.inc` for build 12.0.7 (the same source as the ids/cooldowns above).
+# WCL combatantInfo.talentTree lists the entry ids a player actually took, so a CD's
+# entry ∈ that set ⇒ the talent is present. Lets the never/rarely-pressed warning fire on
+# a taken-but-unused CD (any spec) and stay silent on one the player didn't talent —
+# instead of guessing from the coarse `core` flag. Spells with no talent node (baseline
+# abilities, or a cast id that differs from the node's granted spell) are absent here and
+# fall back to `core`. Refresh alongside OFFENSIVE_CDS when the build changes.
+CD_TALENT_ENTRIES: dict[int, frozenset[int]] = {
+    1122: frozenset({91502}),       # Summon Infernal
+    1719: frozenset({112281}),      # Recklessness
+    5217: frozenset({103188}),      # Tiger's Fury
+    13750: frozenset({112545}),     # Adrenaline Rush
+    19574: frozenset({126402}),     # Bestial Wrath
+    31884: frozenset({102448, 102519, 102569}),  # Avenging Wrath
+    49028: frozenset({96269}),      # Dancing Rune Weapon
+    50334: frozenset({103216}),     # Berserk (Guardian)
+    51271: frozenset({125874}),     # Pillar of Frost
+    51533: frozenset({128236}),     # Feral Spirit
+    84714: frozenset({80242}),      # Frozen Orb
+    106951: frozenset({103162}),    # Berserk (Feral)
+    107574: frozenset({112285, 112305, 136703}),  # Avatar
+    121471: frozenset({112614}),    # Shadow Blades
+    123904: frozenset({125062}),    # Invoke Xuen, the White Tiger
+    132578: frozenset({124849}),    # Invoke Niuzao, the Black Ox
+    167105: frozenset({112144}),    # Colossus Smash
+    190319: frozenset({124756}),    # Combustion
+    191634: frozenset({101859}),    # Stormkeeper
+    194223: frozenset({109849}),    # Celestial Alignment
+    198013: frozenset({112939}),    # Eye Beam
+    205021: frozenset({80216}),     # Ray of Frost
+    205180: frozenset({91554}),     # Summon Darkglare
+    228260: frozenset({103674}),    # Voidform
+    265187: frozenset({125850}),    # Summon Demonic Tyrant
+    288613: frozenset({128367}),    # Trueshot
+    360194: frozenset({112662}),    # Deathmark
+    365350: frozenset({126519}),    # Arcane Surge
+    375087: frozenset({115643}),    # Dragonrage
+    384352: frozenset({101824}),    # Doom Winds
+    1233448: frozenset({96322}),    # Dark Transformation
 }
 
 PURIFYING_BREW = 119582
@@ -124,32 +169,43 @@ def _missed_uses(cast_ts: list[int], cd_s: float, start_ms: int, end_ms: int) ->
 
 def _cd_rows(casts: list[dict], table: list[tuple[int, str, int, bool]], combat_s: float,
              low_frac: float, start_ms: int, end_ms: int, missed_min_cd_s: float,
-             rarely_frac: float) -> list[dict[str, Any]]:
+             rarely_frac: float, talent_entries: set[int] | None = None) -> list[dict[str, Any]]:
     rows = []
     for sid, name, cd_s, core in table:
         cast_ts = _cast_times(casts, sid)
         used = len(cast_ts)
+        # Talent presence (when WCL gave us this player's talentTree). True = they took the
+        # CD's talent → never/rarely pressing it is a real finding. False = didn't take it
+        # → silent "not talented", never warned. None = unknown (no talent data, or a
+        # baseline CD with no talent node) → fall back to the coarse `core` flag.
+        entries = CD_TALENT_ENTRIES.get(sid)
+        if talent_entries is None or entries is None:
+            talented: bool | None = None
+        else:
+            talented = bool(entries & talent_entries)
         # `expected` is the naive on-cooldown ceiling (combat ÷ base CD). Talent/proc/
         # haste cooldown-reduction (a normal WoW mechanic, not anything build-specific)
         # shortens the effective CD, so good play can EXCEED this ceiling (usage >100%).
         # Hence we lead the display with factual cadence (used + per-minute) rather than a
-        # % that reads as nonsense above 100%. `low` is the only judgement we keep, and
-        # only fires when the player clearly has the ability (cast it ≥once) yet pressed
-        # it well under cadence — i.e. genuine hoarding. A zero-cast CD is NOT flagged: a
-        # 0 could mean hoarded, not talented, or a wrong id — indistinguishable here.
+        # % that reads as nonsense above 100%. `low` flags a held-but-used CD (cast ≥once,
+        # well under cadence); `warn` (below) flags never/rarely-pressed once we know the
+        # player actually has the CD.
         expected = max(1, int(combat_s // cd_s)) if combat_s > 0 else 0
         usage = round(used / expected, 2) if expected else 0.0
-        # A *core* burst CD pressed below rarely_frac of its cadence — including never cast
-        # at all — is a real finding (→ warn). For optional/talented CDs a 0 is ambiguous
-        # (not talented vs hoarded), so they're never warned-on-zero: used==0 stays "not
-        # seen". `warn` deliberately reverses the old "a zero-cast CD is NOT flagged" rule,
-        # but only for core CDs, where pressing it IS the expected baseline play.
+        # A burst CD pressed below rarely_frac of its cadence — including never cast at all
+        # — is a finding worth flagging, but only when we're sure the player HAS it. Warn
+        # when the talent is confirmed present (talented is True), or, with no talent data,
+        # when it's a core CD (the fallback). Never warn when the talent is confirmed absent
+        # — that 0 is correct play. This reverses the old "a zero-cast CD is never flagged"
+        # rule, gated on talent/role rather than guessing from the count alone.
+        should_warn = talented if talented is not None else core
         row = {
             "name": name, "used": used, "expected": expected, "core": core,
+            "talented": talented,
             "per_min": round(used / (combat_s / 60), 1) if combat_s > 0 else 0.0,
             "usage_pct": round(100 * usage, 0), "seen": used > 0,
             "low": expected > 0 and used > 0 and usage < low_frac,
-            "warn": core and expected > 0 and usage < rarely_frac,
+            "warn": bool(should_warn) and expected > 0 and usage < rarely_frac,
             "track_missed": False,
         }
         # Timestamp-based missed-use estimate — only for long press-on-CD burst cooldowns
@@ -189,8 +245,14 @@ def analyze_cd_economy(
     combat_s: float,
     knobs: Knobs,
     tank_shuffle_buffs: list[dict] | None = None,
+    talent_entries_by_player: dict[int, set[int]] | None = None,
 ) -> dict[str, Any]:
-    """Per-player CD usage, external give/receive, and Brewmaster mitigation."""
+    """Per-player CD usage, external give/receive, and Brewmaster mitigation.
+
+    `talent_entries_by_player` maps actor id → the set of TraitNodeEntryIDs that player
+    took (from WCL combatantInfo.talentTree). When supplied, the never/rarely-pressed
+    offensive warning is gated on whether the CD's talent is actually present; absent it,
+    the warning falls back to each CD's `core` flag."""
     casts_by_source: dict[int, list[dict]] = defaultdict(list)
     for e in fe.of("Casts"):
         casts_by_source[e.get("sourceID", -1)].append(e)
@@ -214,9 +276,10 @@ def analyze_cd_economy(
         casts = casts_by_source.get(aid, [])
         spec_key = f"{_class_token(actor.sub_type)}:{_class_token(spec)}"
 
+        talent_entries = (talent_entries_by_player or {}).get(aid)
         off_rows = _cd_rows(casts, OFFENSIVE_CDS.get(spec_key, []), combat_s,
                             knobs.cd_low_usage_frac, fight.start_time, fight.end_time,
-                            knobs.cd_missed_min_cd_s, knobs.cd_rarely_used_frac)
+                            knobs.cd_missed_min_cd_s, knobs.cd_rarely_used_frac, talent_entries)
 
         # Defensives the player can be fairly credited with: class baseline + any cast.
         # Shown as raw use counts — defensives are reactive, so a "% of theoretical max"

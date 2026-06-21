@@ -1432,12 +1432,14 @@ render();
         // silent "not seen" for a zero-cast CD, but ONLY for core CDs (optional/talented
         // ones below still fall through to the neutral "not seen" on zero).
         if(c.warn){
+          const have = c.talented===true? ' (talent taken)' : '';
           const tip = c.used
-            ? `pressed only ${c.used}× (${c.usage_pct}% of on-CD cadence) — a core burst CD for this spec`
-            : `never pressed this run — a core burst CD for this spec, not an optional talent`;
+            ? `pressed only ${c.used}× (${c.usage_pct}% of on-CD cadence) — a burst CD this player has${have}`
+            : `never pressed this run — a burst CD this player has${have}, left on the bar`;
           return ['low', c.used? '⚠ rarely pressed' : '⚠ never pressed', tip];
         }
-        if(!c.seen) return ['muted','not seen',''];
+        // talent confirmed NOT taken → "not talented" (a 0 is correct); else just uncast.
+        if(!c.seen) return ['muted', c.talented===false? 'not talented' : 'not seen', ''];
         if(c.track_missed){
           const tip = `${c.ready_idle_s}s ready &amp; uncast over the run · longest idle window ${c.longest_idle_s}s (base CD; downtime counts, so this is a ceiling)`;
           if(c.missed>=2) return ['low',`≈${c.missed} missed`,tip];
@@ -1463,7 +1465,7 @@ render();
       });
       box.append(grid);
       if(ce.players.some(p=>(p.offensive||[]).some(c=>c.warn)))
-        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> (offensive) = a <i>core</i> burst cooldown — part of the spec&#39;s baseline rotation — never cast, or cast far below the cadence its cooldown allows, over the run. Optional/talented CDs are exempt (a 0 there just means the talent wasn&#39;t taken), so they stay the neutral &ldquo;not seen.&rdquo;</div>'));
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> (offensive) = a burst cooldown the player <i>has</i> — confirmed from their talents where WCL provides them, else a known baseline burst for the spec — yet never cast, or cast far below the cadence its cooldown allows, over the run. A CD whose talent the player didn&#39;t take shows the neutral &ldquo;not talented&rdquo; and is never flagged.</div>'));
       if(ce.players.some(p=>(p.defensive||[]).some(c=>c.ignored)))
         box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> = a regularly-usable defensive (short cooldown, not an emergency button) pressed far below the cadence its cooldown allows over the run — it looks ignored (e.g. a rogue never weaving Feint). Long-CD emergency saves and the Healthstone consumable are exempt; tanks are graded by active mitigation instead.</div>'));
       if(ce.players.some(p=>(p.offensive||[]).some(c=>c.track_missed)))
