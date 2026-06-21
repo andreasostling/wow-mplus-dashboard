@@ -187,8 +187,10 @@ The user is **Chibes**, a Brewmaster Monk tank (WCL char id `109774647`), in a f
 | Chibes | Monk | Brewmaster | Tank |
 | Stickerduva | Rogue | Subtlety | DPS |
 | Gaddini | Mage | Frost | DPS |
-| Fyraweave | Druid | Restoration | Healer |
+| Invarianten | Druid | Restoration | Healer |
 | Decayheat | Warlock | Demonology/Destruction | DPS (5th) |
+
+(Decayheat also logs as **Neutronflux** — same player, different name; both are the 5th slot.)
 
 The game is **WoW: Midnight, Season 1**. Goals:
 1. Figure out what the group dies to, whether it's avoidable, and what to counter.
