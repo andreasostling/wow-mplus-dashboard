@@ -1428,6 +1428,15 @@ render();
       // estimate (how many more fit on cooldown); short resource-gated ones keep the
       // simpler under-use flag.
       const cdStatus = (c)=>{
+        // Core burst CD never/rarely pressed — the explicit warning. Reverses the old
+        // silent "not seen" for a zero-cast CD, but ONLY for core CDs (optional/talented
+        // ones below still fall through to the neutral "not seen" on zero).
+        if(c.warn){
+          const tip = c.used
+            ? `pressed only ${c.used}× (${c.usage_pct}% of on-CD cadence) — a core burst CD for this spec`
+            : `never pressed this run — a core burst CD for this spec, not an optional talent`;
+          return ['low', c.used? '⚠ rarely pressed' : '⚠ never pressed', tip];
+        }
         if(!c.seen) return ['muted','not seen',''];
         if(c.track_missed){
           const tip = `${c.ready_idle_s}s ready &amp; uncast over the run · longest idle window ${c.longest_idle_s}s (base CD; downtime counts, so this is a ceiling)`;
@@ -1453,6 +1462,8 @@ render();
         grid.append(el(h+'</div>'));
       });
       box.append(grid);
+      if(ce.players.some(p=>(p.offensive||[]).some(c=>c.warn)))
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> (offensive) = a <i>core</i> burst cooldown — part of the spec&#39;s baseline rotation — never cast, or cast far below the cadence its cooldown allows, over the run. Optional/talented CDs are exempt (a 0 there just means the talent wasn&#39;t taken), so they stay the neutral &ldquo;not seen.&rdquo;</div>'));
       if(ce.players.some(p=>(p.defensive||[]).some(c=>c.ignored)))
         box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> = a regularly-usable defensive (short cooldown, not an emergency button) pressed far below the cadence its cooldown allows over the run — it looks ignored (e.g. a rogue never weaving Feint). Long-CD emergency saves and the Healthstone consumable are exempt; tanks are graded by active mitigation instead.</div>'));
       if(ce.players.some(p=>(p.offensive||[]).some(c=>c.track_missed)))

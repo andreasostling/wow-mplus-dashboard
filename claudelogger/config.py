@@ -78,6 +78,12 @@ class Knobs:
     # fraction of its theoretical max uses (combat_time / cooldown) is flagged as
     # under-used ("held"). Defensives get a separate, looser gate.
     cd_low_usage_frac: float = 0.6
+    # A *core* offensive CD (part of the spec's baseline rotation — see the `core` flag in
+    # OFFENSIVE_CDS) pressed below this fraction of its on-CD cadence — or never pressed at
+    # all — is flagged "⚠ never/rarely pressed" rather than the silent "not seen". A band
+    # stricter than cd_low_usage_frac so it's a clear neglect signal, not borderline hold.
+    # Optional/talented CDs are exempt: a 0 there just means the talent wasn't taken.
+    cd_rarely_used_frac: float = 0.34
     defensive_low_usage_frac: float = 0.5
     # "Rarely uses defensives": a player is flagged when their total personal-defensive
     # presses over a run fall below once per (this multiple × their FASTEST owned

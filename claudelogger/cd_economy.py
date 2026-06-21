@@ -20,28 +20,61 @@ from .config import Knobs
 from .defensives import CLASS_BASELINE, EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES
 from .fetch import Fight, FightEvents, ReportData
 
-# Major offensive cooldowns keyed by "classtoken:spectoken" → [(spell_id, name, cd_s)].
+# Major offensive cooldowns keyed by "classtoken:spectoken" → [(spell_id, name, cd_s, core)].
 #
 # Ids AND base cooldowns are sourced from SimulationCraft's spell database for this exact
 # WoW build (12.0.7) via `simc spell_query=spell.id=<id>`, then cross-checked against the
-# reference run's live cast stream — NOT typed from prior-expansion memory (that's what
-# gave us the phantom "Weapons of Order"/"Icy Veins", both of which no longer exist).
+# reference run's live cast stream / MID1 profiles — NOT typed from prior-expansion memory
+# (that's what gave us the phantom "Weapons of Order"/"Icy Veins", both now gone).
 #
 # cd_s is the BASE cooldown. It is only an approximate "uses ceiling": talents, procs,
 # resets and haste shorten the effective cooldown (e.g. Frost's Frozen Orb via Fingers of
 # Frost), so real cadence can exceed combat/cd — which is exactly why the dashboard leads
 # with actual cadence and only flags clear *under*-use, never treats >100% as wrong.
 #
-# Only specs this fixed 5-stack plays are listed. To add a spec: `simc spell_query` the
-# ids + cooldowns from this build and add the genuine burst CDs. Unseen CDs render as
-# "not seen", never "0% hoarded", so a wrong/missing id degrades safely.
-OFFENSIVE_CDS: dict[str, list[tuple[int, str, int]]] = {
-    "monk:brewmaster": [(132578, "Invoke Niuzao, the Black Ox", 120)],
-    "mage:frost": [(84714, "Frozen Orb", 60), (205021, "Ray of Frost", 60)],
-    "rogue:subtlety": [(121471, "Shadow Blades", 90), (280719, "Secret Technique", 25)],
-    "warlock:demonology": [(265187, "Summon Demonic Tyrant", 60)],
-    "warlock:destruction": [(1122, "Summon Infernal", 120)],  # 5th-slot flex; verify on a Destro run
+# `core` = part of the spec's baseline rotation, where NEVER pressing it over a run is a
+# genuine finding (→ "⚠ never/rarely pressed" warning). `core=False` = talent-gated or
+# situational (most tank offensive CDs, secondary talents); a 0 there just means the talent
+# wasn't taken, so it stays the neutral "not seen" — we never warn-on-zero for those.
+OFFENSIVE_CDS: dict[str, list[tuple[int, str, int, bool]]] = {
+    "monk:brewmaster": [(132578, "Invoke Niuzao, the Black Ox", 120, False)],  # tank, talented
+    "mage:frost": [(84714, "Frozen Orb", 60, True), (205021, "Ray of Frost", 60, False)],
+    "rogue:subtlety": [(121471, "Shadow Blades", 90, True), (280719, "Secret Technique", 25, False)],
+    "warlock:demonology": [(265187, "Summon Demonic Tyrant", 60, True)],
+    "warlock:destruction": [(1122, "Summon Infernal", 120, True)],
     # Restoration Druid (healer) — no offensive cooldowns tracked.
+    # --- All-class coverage. Ids + base cooldowns verified via `simc spell_query` against
+    #     build 12.0.7. `core=True` is reserved for signature bursts with NO common
+    #     passive-conversion, mutually-exclusive-talent, or tank-optional caveat — anything
+    #     where a 0 could be correct play would mis-fire the never-pressed warning, so
+    #     several signature bursts are deliberately core=False (cadence shown, never warned).
+    #     Pure healer specs are omitted (no offensive burst this tool needs).
+    "warrior:arms": [(107574, "Avatar", 90, False), (167105, "Colossus Smash", 45, False)],  # Warbreaker replaces CS; Avatar talented
+    "warrior:fury": [(1719, "Recklessness", 90, True), (107574, "Avatar", 90, False)],
+    "warrior:protection": [(107574, "Avatar", 90, False)],  # tank
+    "paladin:retribution": [(31884, "Avenging Wrath", 120, False)],  # Radiant Glory converts AW to a passive
+    "paladin:protection": [(31884, "Avenging Wrath", 120, False)],  # tank
+    "deathknight:frost": [(51271, "Pillar of Frost", 45, True)],
+    "deathknight:unholy": [(1233448, "Dark Transformation", 45, True)],
+    "deathknight:blood": [(49028, "Dancing Rune Weapon", 120, False)],  # tank
+    "hunter:beastmastery": [(19574, "Bestial Wrath", 90, True)],
+    "hunter:marksmanship": [(288613, "Trueshot", 120, True)],
+    "hunter:survival": [(360952, "Coordinated Assault", 120, False)],  # absent from MID1 profile — cadence only
+    "demonhunter:havoc": [(191427, "Metamorphosis", 120, True), (198013, "Eye Beam", 30, True)],
+    "demonhunter:vengeance": [(187827, "Metamorphosis", 120, False)],  # tank
+    "druid:balance": [(194223, "Celestial Alignment", 180, False)],  # Incarnation overrides the button
+    "druid:feral": [(5217, "Tiger's Fury", 30, True), (106951, "Berserk", 180, False)],  # Incarnation overrides Berserk
+    "druid:guardian": [(50334, "Berserk", 180, False)],  # tank
+    "mage:arcane": [(365350, "Arcane Surge", 90, True)],
+    "mage:fire": [(190319, "Combustion", 120, True)],
+    "priest:shadow": [(228260, "Voidform", 120, False), (391109, "Dark Ascension", 60, False)],  # mutually-exclusive talents
+    "shaman:elemental": [(191634, "Stormkeeper", 60, False), (198067, "Fire Elemental", 120, False)],  # build variance
+    "shaman:enhancement": [(51533, "Feral Spirit", 90, True), (384352, "Doom Winds", 60, False)],
+    "evoker:devastation": [(375087, "Dragonrage", 120, True)],
+    "monk:windwalker": [(123904, "Invoke Xuen, the White Tiger", 120, True)],
+    "rogue:assassination": [(360194, "Deathmark", 120, True)],
+    "rogue:outlaw": [(13750, "Adrenaline Rush", 180, True)],
+    "warlock:affliction": [(205180, "Summon Darkglare", 120, True)],
 }
 
 PURIFYING_BREW = 119582
@@ -89,10 +122,11 @@ def _missed_uses(cast_ts: list[int], cd_s: float, start_ms: int, end_ms: int) ->
             "ready_idle_s": round(idle_ms / 1000), "longest_idle_s": round(longest_ms / 1000)}
 
 
-def _cd_rows(casts: list[dict], table: list[tuple[int, str, int]], combat_s: float,
-             low_frac: float, start_ms: int, end_ms: int, missed_min_cd_s: float) -> list[dict[str, Any]]:
+def _cd_rows(casts: list[dict], table: list[tuple[int, str, int, bool]], combat_s: float,
+             low_frac: float, start_ms: int, end_ms: int, missed_min_cd_s: float,
+             rarely_frac: float) -> list[dict[str, Any]]:
     rows = []
-    for sid, name, cd_s in table:
+    for sid, name, cd_s, core in table:
         cast_ts = _cast_times(casts, sid)
         used = len(cast_ts)
         # `expected` is the naive on-cooldown ceiling (combat ÷ base CD). Talent/proc/
@@ -105,11 +139,17 @@ def _cd_rows(casts: list[dict], table: list[tuple[int, str, int]], combat_s: flo
         # 0 could mean hoarded, not talented, or a wrong id — indistinguishable here.
         expected = max(1, int(combat_s // cd_s)) if combat_s > 0 else 0
         usage = round(used / expected, 2) if expected else 0.0
+        # A *core* burst CD pressed below rarely_frac of its cadence — including never cast
+        # at all — is a real finding (→ warn). For optional/talented CDs a 0 is ambiguous
+        # (not talented vs hoarded), so they're never warned-on-zero: used==0 stays "not
+        # seen". `warn` deliberately reverses the old "a zero-cast CD is NOT flagged" rule,
+        # but only for core CDs, where pressing it IS the expected baseline play.
         row = {
-            "name": name, "used": used, "expected": expected,
+            "name": name, "used": used, "expected": expected, "core": core,
             "per_min": round(used / (combat_s / 60), 1) if combat_s > 0 else 0.0,
             "usage_pct": round(100 * usage, 0), "seen": used > 0,
             "low": expected > 0 and used > 0 and usage < low_frac,
+            "warn": core and expected > 0 and usage < rarely_frac,
             "track_missed": False,
         }
         # Timestamp-based missed-use estimate — only for long press-on-CD burst cooldowns
@@ -176,7 +216,7 @@ def analyze_cd_economy(
 
         off_rows = _cd_rows(casts, OFFENSIVE_CDS.get(spec_key, []), combat_s,
                             knobs.cd_low_usage_frac, fight.start_time, fight.end_time,
-                            knobs.cd_missed_min_cd_s)
+                            knobs.cd_missed_min_cd_s, knobs.cd_rarely_used_frac)
 
         # Defensives the player can be fairly credited with: class baseline + any cast.
         # Shown as raw use counts — defensives are reactive, so a "% of theoretical max"
