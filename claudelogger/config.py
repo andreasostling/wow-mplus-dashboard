@@ -101,6 +101,12 @@ class Knobs:
     # time-loss breakdown (shorter gaps are just pull-to-pull travel noise).
     downtime_gap_s: float = 8.0
 
+    # Briefing: a leaked cast needs at least this many observed leaks before its
+    # damage-per-cast is trusted as a *ranked* kick-priority signal. Below it, the
+    # number is still shown but flagged "low sample" and sorted last — one ×1 leak
+    # (≈798k Dread Screech) must not define the top kick target on false precision.
+    briefing_min_leak_sample: int = 2
+
     # "Very dangerous cast" detection (empirical, from the DamageTaken stream — NPC
     # casts aren't logged, so a "cast" is approximated by its damage). An enemy ability
     # is flagged dangerous if EITHER a single AoE pulse (same caster+ability landing

@@ -187,7 +187,8 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
                             log_positions: dict | None = None,
                             public_danger: dict | None = None,
                             guide_data: dict | None = None,
-                            cache_dir: Path | None = None) -> dict[str, Any]:
+                            cache_dir: Path | None = None,
+                            min_leak_sample: int = 2) -> dict[str, Any]:
     by_dungeon: dict[str, list[dict]] = defaultdict(list)
     for r in runs:
         by_dungeon[r["dungeon"]].append(r)
@@ -254,6 +255,9 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
             ((sp, n, round(leaked_dmg[sp] / n) if n else 0) for sp, n in leaked.items()),
             key=lambda t: -t[2],
         )[:12]
+        # Full per-spell leak index (not truncated) — folded into the route stop table as a
+        # damage-per-cast column (the single forward "what to stop" view); see _merge_route_info.
+        leaked_index = {sp: [n, round(leaked_dmg[sp] / n) if n else 0] for sp, n in leaked.items()}
 
         # Start from the comp's spec-based toolkit (what we *can* bring), then fold in
         # anything actually cast in these runs (covers off-kit/seed gaps).
@@ -303,6 +307,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
             "threats": threats,
             "peel_mobs": peel.most_common(8),
             "leaked_casts": leaked_ranked,
+            "leaked_index": leaked_index,
             "cc_starved_pulls": starved,
             "pulls": pulls,
             "players_dying": Counter(d["player"] for d in deaths).most_common(),
@@ -318,7 +323,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
         }
 
     if route_info:
-        _merge_route_info(out, route_info, by_dungeon, log_positions, cache_dir)
+        _merge_route_info(out, route_info, by_dungeon, log_positions, cache_dir, min_leak_sample)
     # Route-only dungeons (no logged runs) get empty comp lists from _empty_briefing —
     # backfill them with the comp's spec-based kit so "Your CC" is never blank.
     for b in out.values():
@@ -366,7 +371,7 @@ def build_dungeon_briefings(runs: list[dict], route_info: list[dict] | None = No
 def _empty_briefing(name: str) -> dict[str, Any]:
     return {"dungeon": name, "boss_guide": _boss_guide_for(name),
             "runs": 0, "key_levels": [], "total_deaths": 0, "wipes": 0,
-            "threats": [], "peel_mobs": [], "fixate_mobs": [], "leaked_casts": [],
+            "threats": [], "peel_mobs": [], "fixate_mobs": [], "leaked_casts": [], "leaked_index": {},
             "cc_starved_pulls": 0, "pulls": 0, "players_dying": [], "comp_interrupts": [],
             "comp_stuns": [], "comp_other_cc": [], "dangerous_casts": [], "danger_spells": [],
             "danger_source": "", "danger_meta": {}, "guide_abilities": [], "guide_url": ""}
@@ -458,7 +463,8 @@ def _build_offroute_map(deduped: list[dict], mobs: dict, route: dict,
 def _merge_route_info(out: dict[str, Any], route_info: list[dict],
                       by_dungeon: dict[str, list[dict]] | None = None,
                       log_positions: dict | None = None,
-                      cache_dir: Path | None = None) -> None:
+                      cache_dir: Path | None = None,
+                      min_leak_sample: int = 2) -> None:
     norm = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     bnorms = {d: norm(d) for d in out}
     for r in route_info:
@@ -471,17 +477,39 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
             match = r["display"]
             out[match] = _empty_briefing(match)
             bnorms[match] = r["norm"]
-        death_by_mob: Counter = Counter()
+        # Per-(mob, spell) death attribution — NOT the mob's whole total. The old
+        # death_by_mob[mob] summed every death the mob contributed to (mostly via *other*
+        # abilities) and stamped it on each kickable spell's row, so a stoppable cast that
+        # killed no one read as "⚠️5". Count only deaths where *this exact spell* contributed.
+        death_by_spell: dict[tuple, int] = {}
         for t in out[match]["threats"]:
-            death_by_mob[t["mob"]] += t["deaths"]
-        kick_targets = [
-            {**th, "deaths_here": death_by_mob.get(th["mob"], 0)} for th in r.get("threats", [])
-        ]
-        kick_targets.sort(key=lambda x: (-x["deaths_here"], x["mob"]))
-        stop_targets = [
-            {**th, "deaths_here": death_by_mob.get(th["mob"], 0)} for th in r.get("stop_threats", [])
-        ]
-        stop_targets.sort(key=lambda x: (-x["deaths_here"], x["mob"]))
+            death_by_spell[(t["mob"], t["spell"])] = t["deaths"]
+        leaked_index = out[match].get("leaked_index", {})
+
+        # Flatten each route NPC's spell list into one row per (mob, spell), folding in the
+        # corrected per-spell death count and the damage-per-leaked-cast severity signal
+        # (with a min-sample floor so a single ×1 leak can't define the top kick). This is
+        # the single forward "what to stop" view — replaces the old per-mob rows + the
+        # standalone "kick priority" list.
+        def _rows(threats: list[dict]) -> list[dict]:
+            rows: list[dict] = []
+            for th in threats:
+                pairs = th.get("spell_pairs") or [{"name": s, "id": 0} for s in th.get("spells", [])]
+                for p in pairs:
+                    n, dpc = leaked_index.get(p["name"], [0, 0])
+                    ranked = n >= min_leak_sample
+                    rows.append({
+                        "mob": th["mob"], "spell": p["name"], "id": p.get("id", 0),
+                        "cat": p.get("cat", ""),
+                        "deaths_here": death_by_spell.get((th["mob"], p["name"]), 0),
+                        "leak_n": n, "dmg_per_cast": dpc, "low_sample": bool(n and not ranked),
+                    })
+            # Ranked (well-sampled) high-damage casts first, then by deaths, then name.
+            rows.sort(key=lambda x: (-(x["dmg_per_cast"] if x["leak_n"] >= min_leak_sample else 0),
+                                     -x["deaths_here"], -x["dmg_per_cast"], x["mob"], x["spell"]))
+            return rows
+        kick_targets = _rows(r.get("threats", []))
+        stop_targets = _rows(r.get("stop_threats", []))
         # Detect off-route mobs: compare NPCs seen in pulls against the route's NPC set.
         route_npc_set = set(r.get("npc_ids", []))
         off_route: list[dict] = []
@@ -560,6 +588,25 @@ def _merge_route_info(out: dict[str, Any], route_info: list[dict],
 _ACTION_ICON = {"Interrupt": "🛑", "Stun": "💫", "Move": "🟢",
                 "Defensive": "🛡️", "Defensive / position": "🛡️"}
 
+# The ⚠️ table now shows ONLY non-stoppable rows. Interrupt/Stun rows are redundant with
+# the route stop-targets table (the single "what to stop" view), and literal Melee rows are
+# tank-threat/positioning, not a cast to react to — both are suppressed here.
+_NONSTOP_ACTIONS = {"Move", "Defensive", "Defensive / position"}
+
+
+def _nonstop_threats(b: dict) -> list[dict]:
+    return [t for t in b.get("threats", [])
+            if t["action"] in _NONSTOP_ACTIONS and t.get("spell") != "Melee"]
+
+
+def _dmg_per_cast_str(row: dict) -> str:
+    """Compact damage-per-leaked-cast label for a route row, '' if never leaked."""
+    n, dpc = row.get("leak_n", 0), row.get("dmg_per_cast", 0)
+    if not n or not dpc:
+        return ""
+    val = f"≈{dpc/1000:.0f}k/cast" if dpc >= 1000 else f"≈{dpc}/cast"
+    return f"{val} (low sample ×{n})" if row.get("low_sample") else f"{val} (×{n})"
+
 
 def briefing_to_markdown(b: dict) -> str:
     keys = b["key_levels"]
@@ -568,16 +615,10 @@ def briefing_to_markdown(b: dict) -> str:
         f"# {b['dungeon']} — pre-run briefing",
         f"_Based on {b['runs']} run(s) at {krange}, {b['total_deaths']} cause-relevant death(s)"
         + (f", {b['wipes']} wipe(s)" if b.get("wipes") else "") + "._",
-        "",
-        "## ⚠️ Dangerous abilities — what to do",
-        "",
-        "| Do this | Mob | Spell | Deaths | Note |",
-        "|---|---|---|---:|---|",
     ]
-    for t in b["threats"][:20]:
-        icon = _ACTION_ICON.get(t["action"], "")
-        L.append(f"| {icon} **{t['action']}** | {t['mob']} | {t['spell']} | {t['deaths']} | {t['detail']} |")
 
+    # The single forward "what to stop" view — route stop-targets, one row per (mob, spell),
+    # with the corrected per-spell death count and the damage-per-leaked-cast severity column.
     route = b.get("route")
     if route:
         L += ["", f"## 🗺️ On your route — stop targets ({route['n_npcs']} mobs, {route['pulls']} pulls)"]
@@ -586,16 +627,26 @@ def briefing_to_markdown(b: dict) -> str:
         elif not route["kick_targets"] and not route.get("stop_targets"):
             L.append("_No stoppable casters on the planned route._")
         else:
+            def _route_table(title: str, rows: list[dict]) -> list[str]:
+                out = ["", f"**{title}**", "", "| Mob | Ability | Dmg/cast | Killed us |", "|---|---|---|---:|"]
+                for row in rows:
+                    seen = f"⚠️ {row['deaths_here']}" if row["deaths_here"] else "—"
+                    out.append(f"| {row['mob']} | {row['spell']} | {_dmg_per_cast_str(row) or '—'} | {seen} |")
+                return out
             if route["kick_targets"]:
-                L += ["", "**Kick (interruptible)**", "", "| Mob | Interrupt these | Killed us |", "|---|---|---:|"]
-                for kt in route["kick_targets"]:
-                    seen = f"⚠️ {kt['deaths_here']}" if kt["deaths_here"] else "—"
-                    L.append(f"| {kt['mob']} | {', '.join(kt['spells'])} | {seen} |")
+                L += _route_table("Kick (interruptible)", route["kick_targets"])
             if route.get("stop_targets"):
-                L += ["", "**Stun/CC (not kickable)**", "", "| Mob | Stop these | Killed us |", "|---|---|---:|"]
-                for st in route["stop_targets"]:
-                    seen = f"⚠️ {st['deaths_here']}" if st["deaths_here"] else "—"
-                    L.append(f"| {st['mob']} | {', '.join(st['spells'])} | {seen} |")
+                L += _route_table("Stun/CC (not kickable)", route["stop_targets"])
+
+    # ⚠️ table: ONLY non-stoppable rows (move-out / pop-a-defensive). Interrupt/Stun rows
+    # are the route table's job; literal Melee rows are tank-threat, handled by peel below.
+    nonstop = _nonstop_threats(b)
+    if nonstop:
+        L += ["", "## ⚠️ Not stoppable — move out or pop a defensive", "",
+              "| Do this | Mob | Spell | Deaths | Note |", "|---|---|---|---:|---|"]
+        for t in nonstop[:20]:
+            icon = _ACTION_ICON.get(t["action"], "")
+            L.append(f"| {icon} **{t['action']}** | {t['mob']} | {t['spell']} | {t['deaths']} | {t['detail']} |")
 
     if b.get("fixate_mobs"):
         L += ["", "## ⚡ Fixate mobs — be ready to peel/kite (ignores threat, taunt won't help)", ""]
@@ -605,17 +656,12 @@ def briefing_to_markdown(b: dict) -> str:
         L += ["", "## 🪓 Mobs that peel to squishies — grab these early (threat, not fixate)", ""]
         L += [f"- **{m}** — clipped a non-tank {n}×" for m, n in b["peel_mobs"]]
 
-    if b["leaked_casts"]:
-        L += ["", "## 🎯 Kick priority (by damage per leaked cast)", ""]
-        L += [f"- **{sp}** — ≈{dmg:,} dmg/cast (leaked ×{n})" for sp, n, dmg in b["leaked_casts"]]
-    L += ["", "## 💀 Who dies here", "",
-          ", ".join(f"{p} ({n})" for p, n in b["players_dying"]) or "—"]
-    L += ["", "## 🧰 Your CC & pacing", "",
-          f"- Interrupts: {', '.join(b['comp_interrupts']) or '—'}",
-          f"- True stuns: {', '.join(b['comp_stuns']) or '—'}",
-          f"- Other CC (not stuns): {', '.join(b.get('comp_other_cc', [])) or '—'}",
-          f"- CC-starved pulls: **{b['cc_starved_pulls']} / {b['pulls']}** "
-          f"(pulls where more interruptible casts leaked than you had kicks/stuns for)"]
+    # The one dungeon-specific pacing number worth keeping (the static CC kit lists were
+    # byte-identical across every dungeon). Hidden for route-only (0-pull) dungeons.
+    if b.get("pulls"):
+        L += ["", "## 🧰 Pacing", "",
+              f"- CC-starved pulls: **{b['cc_starved_pulls']} / {b['pulls']}** "
+              f"(pulls where more interruptible casts leaked than you had kicks/stuns for)"]
     return "\n".join(L) + "\n"
 
 
@@ -779,7 +825,7 @@ _HTML = r"""<!doctype html>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="ccmobs"></div>
 
   <h2>Interruptible casts that leaked (pull-level)</h2>
-  <div class="contrib" style="margin:-4px 0 8px">Retrospective evidence behind the Briefing tab's 🎯 Kick priority — the casts that actually got through.</div>
+  <div class="contrib" style="margin:-4px 0 8px">Retrospective evidence behind the Briefing tab's route stop-targets Dmg/cast column — the casts that actually got through.</div>
   <div class="bars" id="leaked"></div>
 
   <h2>Death log</h2>
@@ -951,25 +997,17 @@ function renderBriefing(){
   // dungeon summary cards
   const avoidHere = rows.filter(x=>x.dungeon===bsel.value && !x.is_cascade && x.avoidable===true).length;
   const bCards = [['Deaths', b.total_deaths], ['Wipes', b.wipes||0], ['Key levels', kr],
-    ['Avoidable', avoidHere], ['CC-starved pulls', `${b.cc_starved_pulls}/${b.pulls}`]];
+    ['Avoidable', avoidHere]];
+  if(b.pulls) bCards.push(['CC-starved pulls', `${b.cc_starved_pulls}/${b.pulls}`]);  // hide degenerate 0/0
   const bcWrap = el('<div class="brief-cards"></div>');
   bCards.forEach(([l,n])=>bcWrap.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
   box.append(bcWrap);
   // ---- top "before the key" panel: dangerous casts + route stop/kick targets ----
   const dangerSet = new Set(b.danger_spells||[]);
-  const markSpells = (arr)=>(arr||[]).map(s=>dangerSet.has(s)?('💥 '+esc(s)):esc(s)).join(', ');
   // Wowhead spell lookup (opens in a new tab). id 0/absent => plain text.
   const spellLink = (name,id)=> id
     ? `<a class="lever" href="https://www.wowhead.com/spell=${id}" target="_blank" rel="noopener" title="Look up on Wowhead">${esc(name)} ↗</a>`
     : `<span class="lever">${esc(name)}</span>`;
-  // Render a spell list with Wowhead links + 💥 on flagged-dangerous casts; falls back
-  // to plain marked names when per-spell ids aren't available.
-  const renderSpells = (pairs, names)=>{
-    if(pairs && pairs.length) return pairs.map(p=>
-      (dangerSet.has(p.name)?'💥 ':'') + spellLink(p.name, p.id)
-      + (p.cat?` <span class="muted">(${esc(p.cat)})</span>`:'')).join(', ');
-    return markSpells(names);
-  };
   // ---- route stop/kick targets — lead the panel ----
   const rt=b.route;
   // Surface the keystone route link + quick boss-guide video at the top header
@@ -987,23 +1025,32 @@ function renderBriefing(){
     if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
     else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
     else{
+      // One row per (mob, spell): Wowhead-linked ability, the damage-per-leaked-cast
+      // severity signal (low-sample flagged + muted), and the corrected per-spell death
+      // count. The standalone "kick priority" list folded into the Dmg/cast column here.
+      const dmgCell=(row)=>{
+        if(!row.leak_n||!row.dmg_per_cast) return '<span class=muted>—</span>';
+        const val=row.dmg_per_cast>=1000?`≈${Math.round(row.dmg_per_cast/1000)}k`:`≈${row.dmg_per_cast}`;
+        return row.low_sample
+          ? `<span class="muted" title="only ${row.leak_n} leak — too few to rank">${val}/cast · low sample ×${row.leak_n}</span>`
+          : `${val}/cast <span class="muted">×${row.leak_n}</span>`;
+      };
+      const routeTbl=(rows)=>{
+        const t=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Dmg/cast</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const tb=t.querySelector('tbody');
+        rows.forEach(row=>tb.append(el(`<tr><td>${esc(row.mob)}</td>
+          <td class="contrib">${(dangerSet.has(row.spell)?'💥 ':'')+spellLink(row.spell,row.id)}${row.cat?` <span class="muted">(${esc(row.cat)})</span>`:''}</td>
+          <td>${dmgCell(row)}</td>
+          <td>${row.deaths_here?('⚠️ '+row.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
+        return t;
+      };
       if((rt.kick_targets||[]).length){
         box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
-        const rtbl=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
-        const rb=rtbl.querySelector('tbody');
-        rt.kick_targets.forEach(kt=>rb.append(el(`<tr><td>${esc(kt.mob)}</td>
-          <td class="contrib">${renderSpells(kt.spell_pairs, kt.spells)}</td>
-          <td>${kt.deaths_here?('⚠️ '+kt.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        box.append(rtbl);
+        box.append(routeTbl(rt.kick_targets));
       }
       if((rt.stop_targets||[]).length){
         box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
-        const stbl=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
-        const sb=stbl.querySelector('tbody');
-        rt.stop_targets.forEach(st=>sb.append(el(`<tr><td>${esc(st.mob)}</td>
-          <td class="contrib">${renderSpells(st.spell_pairs, st.spells)}</td>
-          <td>${st.deaths_here?('⚠️ '+st.deaths_here):'<span class=muted>—</span>'}</td></tr>`)));
-        box.append(stbl);
+        box.append(routeTbl(rt.stop_targets));
       }
     }
   }
@@ -1063,25 +1110,21 @@ function renderBriefing(){
     box.append(empty);
     apply();
   }
-  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🧰 Your CC</h3>'));
-  const ccRows = [['Interrupts', b.comp_interrupts], ['True stuns', b.comp_stuns], ['Other CC', b.comp_other_cc]];
-  box.append(el(`<table class="kv"><tbody>${ccRows.map(([k,v])=>
-    `<tr><th>${k}</th><td>${esc((v||[]).join(', ')||'—')}</td></tr>`).join('')}</tbody></table>`));
-  const tbl = el('<table><thead><tr><th>Do this</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Why / how</th></tr></thead><tbody></tbody></table>');
-  const tb = tbl.querySelector('tbody');
-  (b.threats||[]).slice(0,20).forEach(t=>{
-    tb.append(el(`<tr><td><span class="pill ${actionCss[t.action]||'b-other'}">${actionIcon[t.action]||''} ${esc(t.action)}</span></td>
-      <td>${esc(t.mob)}</td><td>${esc(t.spell)}</td><td>${t.deaths}</td>
-      <td class="contrib">${esc(t.detail)}</td></tr>`));
-  });
-  box.append(tbl);
-  // 🎯 Kick priority — the ranked interrupt plan (by damage per leaked cast). The Deaths
-  // tab's "casts that leaked" is the per-pull evidence behind this ranking.
-  if((b.leaked_casts||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">🎯 Kick priority — interrupt highest first <span class="muted" style="font-weight:normal">· by damage per leaked cast</span></h3>'));
-    const mx=Math.max(...b.leaked_casts.map(a=>a[2]||0),1);
-    b.leaked_casts.forEach(([sp,n,dmg])=>box.append(el(`<div class="bar bar-wide"><span>${esc(sp)}</span>
-      <span class="track"><span class="fill" style="width:${100*(dmg||0)/mx}%" title="≈${Math.round(dmg||0).toLocaleString()} dmg per leaked cast"></span></span><span style="white-space:nowrap"><span class="muted">×${n}</span> ${Math.round((dmg||0)/1000)}k/cast</span></div>`)));
+  // ⚠️ Not stoppable — only the move-out / pop-a-defensive rows. Interrupt/Stun rows live
+  // in the route stop-targets table above (the single "what to stop" view); literal Melee
+  // rows are tank-threat and surface in the peel section. Suppressed entirely when empty.
+  const nonstop=(b.threats||[]).filter(t=>
+    (t.action==='Move'||t.action==='Defensive'||t.action==='Defensive / position') && t.spell!=='Melee');
+  if(nonstop.length){
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">⚠️ Not stoppable — move out or pop a defensive</h3>'));
+    const tbl = el('<table><thead><tr><th>Do this</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Why / how</th></tr></thead><tbody></tbody></table>');
+    const tb = tbl.querySelector('tbody');
+    nonstop.slice(0,20).forEach(t=>{
+      tb.append(el(`<tr><td><span class="pill ${actionCss[t.action]||'b-other'}">${actionIcon[t.action]||''} ${esc(t.action)}</span></td>
+        <td>${esc(t.mob)}</td><td>${esc(t.spell)}</td><td>${t.deaths}</td>
+        <td class="contrib">${esc(t.detail)}</td></tr>`));
+    });
+    box.append(tbl);
   }
   if((b.dangerous_casts||[]).length){
     const allDanger=b.dangerous_casts;
@@ -1140,13 +1183,8 @@ function renderBriefing(){
     b.peel_mobs.forEach(([m,n])=>box.append(el(`<div class="bar"><span>${esc(m)}</span>
       <span class="track"><span class="fill" style="width:${100*n/pmx}%"></span></span><span>${n}</span></div>`)));
   }
-  // who tends to die here — forward-looking ("protect them"); the Deaths tab has the counts
-  if((b.players_dying||[]).length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">💀 Who to protect — dies here most often</h3>'));
-    const pdmx=Math.max(...b.players_dying.map(a=>a[1]));
-    b.players_dying.forEach(([p,n])=>box.append(el(`<div class="bar"><span>${esc(p)}</span>
-      <span class="track"><span class="fill" style="width:${100*n/pdmx}%"></span></span><span>${n}</span></div>`)));
-  }
+  // Per-player death counts intentionally live only in the Deaths tab — low forward-value
+  // for a pre-run brief, and they surfaced stale-roster names here.
 }
 bsel.onchange = ()=>{ renderBriefing(); syncDungeon(bsel.value, bsel); };
 registerDungeonSelect(bsel, renderBriefing);

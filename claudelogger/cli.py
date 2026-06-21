@@ -303,7 +303,8 @@ def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None,
         print(f"combat log: positions for {len(log_positions)} dungeon run(s) "
               f"({combatlog.find_archive()})", file=sys.stderr)
     briefings = report.build_dungeon_briefings(runs, route_info, log_positions, public_danger,
-                                               guide_data, cache_dir=cfg.cache_dir)
+                                               guide_data, cache_dir=cfg.cache_dir,
+                                               min_leak_sample=cfg.knobs.briefing_min_leak_sample)
     jpath = report.write_json(cfg.out_dir, season, runs, briefings)
     hpath = report.write_html(cfg.out_dir, season, runs, briefings)
     report.write_html_artifact(cfg.out_dir, season, runs, briefings)
