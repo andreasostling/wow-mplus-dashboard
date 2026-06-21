@@ -13,7 +13,7 @@ import re
 
 from . import armory, fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
 from .classify import classify_fight
-from .config import ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT
+from .config import ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT, ROSTER
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
 from .wcl import WCLClient
 
@@ -133,6 +133,25 @@ def analyze_report(
         mplus = [f for f in mplus if f.id == only_fight]
     if not mplus:
         print(f"  {code}: no Mythic+ fights found.", file=sys.stderr)
+        return runs
+    # Reject fights WCL merged with a foreign group. A legitimate run is exactly the fixed
+    # 5-stack; anything else (e.g. a 1.6-min, 25-friendly Skyreach segment) once leaked ~20
+    # strangers into the season, polluting the comp-CC kit and roster. Drop any fight whose
+    # friendly set isn't a clean roster 5-stack so no stranger reaches party/cd_economy/CC.
+    kept: list[Fight] = []
+    for f in mplus:
+        names = [rep.actors[i].name for i in f.friendly_players if i in rep.actors]
+        strangers = sorted(n for n in names if n not in ROSTER)
+        if len(f.friendly_players) != 5 or strangers:
+            why = (f"{len(f.friendly_players)} friendlies"
+                   + (f", non-roster: {', '.join(strangers)}" if strangers else ""))
+            print(f"  {code} fight {f.id} ({f.name} +{f.keystone_level}): skipping — "
+                  f"not a clean 5-stack ({why}).", file=sys.stderr)
+            continue
+        kept.append(f)
+    mplus = kept
+    if not mplus:
+        print(f"  {code}: no clean 5-stack Mythic+ fights found.", file=sys.stderr)
         return runs
     if mdt_facts is None:
         mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)

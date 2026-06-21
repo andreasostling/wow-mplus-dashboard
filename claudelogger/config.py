@@ -171,6 +171,16 @@ ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
     "Decayheat": ("eu", "doomhammer", "decayheat"),
 }
 
+# The fixed 5-stack's character names (all known aliases). A legitimate M+ run logs
+# exactly these 5 players; the 5th slot logs as Decayheat OR Neutronflux (same person).
+# Used to reject fights WCL merged with a foreign group: a 25-friendly Skyreach segment
+# once leaked ~20 strangers into the season, polluting the comp-CC kit and roster. A fight
+# whose friendly set isn't a clean subset of this roster of size 5 is skipped — see
+# `cli.analyze_report`. The fixed-5-stack assumption is baked in project-wide (CLAUDE.md).
+ROSTER: frozenset[str] = frozenset({
+    "Chibes", "Stickerduva", "Gaddini", "Invarianten", "Decayheat", "Neutronflux",
+})
+
 # Per-dungeon "quick boss guide" YouTube links, surfaced in the briefing next to the
 # keystone route link. Keyed by canonical dungeon name (matches DEFAULT_ROUTES).
 BOSS_GUIDES: dict[str, str] = {
