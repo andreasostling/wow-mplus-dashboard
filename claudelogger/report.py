@@ -787,6 +787,7 @@ _HTML = r"""<!doctype html>
   .gapbar .ceil{position:absolute;inset:0;background:#1d2530}
   .gapbar .act{position:absolute;left:0;top:0;bottom:0;background:var(--accent);min-width:2px;display:flex;align-items:center;justify-content:flex-end}
   .gapbar .act .lbl{color:#0b0e14;font-size:11px;font-weight:600;padding:0 6px;white-space:nowrap}
+  .gapbar .lbl-out{position:absolute;top:0;bottom:0;display:flex;align-items:center;padding-left:4px;font-size:11px;font-weight:600;color:var(--ink);white-space:nowrap}
   .gapbar .meta{font-size:12px;white-space:nowrap}
   .cde{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;align-items:start}
   .cde h4{margin:0 0 6px;font-size:13px} .cde .role{color:var(--mut);font-weight:400;font-size:11px}
@@ -1339,6 +1340,14 @@ render();
       (ds.players||[]).forEach(p=>{ simLookup[k][p.player] = p; });
     }
   }
+  // The healer isn't simmed (no ceiling) but still gets the +kl field DPS benchmark, so
+  // their bar shows the p90 marker like everyone else. Merge it in under the same lookup.
+  if(SIMC && SIMC.healer_benchmarks){
+    for(const [dn, b] of Object.entries(SIMC.healer_benchmarks)){
+      const k = dnorm(dn); simLookup[k] = simLookup[k] || {};
+      if(b && b.player) simLookup[k][b.player] = b;
+    }
+  }
   const debriefRuns = RUNS.map((r,i)=>({r,i})).filter(x=>x.r.timing && Object.keys(x.r.timing).length);
   if(!debriefRuns.length){
     document.getElementById('run-debrief').innerHTML='<div class="muted">No run timing data — re-run the analysis.</div>';
@@ -1410,15 +1419,16 @@ render();
           const bits=[];
           if(pctT!==null) bits.push(`<span class="${pctClass(pctT)}" title="vs the p90 (typical) +${kl} WCL logger">${pctT}% p90 WCL</span>`);
           if(pctC!==null) bits.push(`<span class="${pctClass(pctC)}" title="vs your SimC ceiling">${pctC}% sim</span>`);
-          // DPS number rides the tip of the blue (actual) bar when there's room inside it;
-          // for a too-short bar it falls back to the start of the right-hand meta text. The
-          // meta column keeps only the % deltas, so it no longer overflows.
+          // DPS number always rides the bar: inside the blue bar (dark, right-aligned)
+          // when there's room, else just past its tip in the track (light). The meta
+          // column keeps only the % deltas, so it never overflows.
           const dpsStr = `${Math.round(a.run_dps/1000)}k`;
           const inside = actW>=15;
           const actLabel = inside?`<span class="lbl">${dpsStr}</span>`:'';
-          const meta = `${inside?'':dpsStr+(bits.length?' · ':'')}${bits.join(' · ')}${hotMark}`;
+          const tipLabel = inside?'':`<span class="lbl-out" style="left:${actW}%">${dpsStr}</span>`;
+          const meta = `${bits.join(' · ')}${hotMark}`;
           box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
-            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${topMark}</span>
+            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${topMark}${tipLabel}</span>
             <span class="muted meta">${meta}</span></div>`));
         });
         let cap = '<span style="color:#e0a040">▎</span> = typical +'+kl+' logger (p90 WCL run-DPS, real-player context) · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear (gear-fair target).';

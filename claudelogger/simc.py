@@ -801,3 +801,34 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
                 # below the field is gear-explained, not proof the sim is conservative.
                 p["sim_realism"] = ("optimistic" if pctile >= 90
                                     else "below_field" if pctile <= 10 else "plausible")
+
+
+def healer_dps_benchmarks(client, summary: dict, runs: list[dict],
+                          key_level: int = 12, pages: int = 3) -> dict[str, dict]:
+    """The +key_level field DPS benchmark for the (un-simmed) healer, per dungeon.
+
+    The healer isn't simmed (no SimC ceiling), so they're absent from `summary` and
+    attach_dps_benchmarks skips them — but the run debrief still wants to show their
+    *damage* contribution against the real field. Pull the same WCL characterRankings
+    (metric=dps) for the healer's class/spec and return the p90 ("typical") + best per
+    dungeon, keyed like a stripped-down sim-player dict (no `dps` ceiling). Returns
+    {dungeon: {player, spec, role, top12_typical, top12_best, top12_n, top12_key}}."""
+    healer = next((p for r in runs for p in r.get("party", [])
+                   if p.get("role") == "healer" and p.get("spec") and p.get("class")), None)
+    if not healer:
+        return {}
+    cls, spec, name = healer["class"], healer["spec"], healer["name"]
+    out: dict[str, dict] = {}
+    for dungeon in (summary.get("by_dungeon") or {}):
+        enc = MPLUS_ENCOUNTERS.get(dungeon)
+        if not enc:
+            continue
+        rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level, pages=pages)
+        dps = sorted((r["dps"] for r in rk if r.get("dps")), reverse=True)
+        if not dps:
+            continue
+        p90 = (statistics.quantiles(dps, n=10, method="inclusive")[8] if len(dps) >= 2 else dps[0])
+        out[dungeon] = {"player": name, "spec": f"{spec} {cls}", "role": "heal",
+                        "top12_typical": round(p90), "top12_best": round(dps[0]),
+                        "top12_n": len(dps), "top12_key": key_level}
+    return out
