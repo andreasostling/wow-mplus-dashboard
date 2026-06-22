@@ -1472,6 +1472,10 @@ render();
         let cap = '<span style="color:#5e87a8">▎</span> = floor (p10) · <span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) of the +'+kl+' WCL field · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling (a +12 gear-potential model — fixed, so % sim runs low on lower keys).';
         if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
         cap += ' <span class="muted">Field = timed +'+kl+' runs only, benchmarked at each run&#39;s own key level. WCL = Warcraft Logs.</span>';
+        // +10 is the last reward threshold, so strong players speed-farm fast +10s for the
+        // cap instead of pushing higher — the +10 field is unusually stacked (its p10/p50
+        // can exceed +11/+12). Flag it so a sub-field +10 % isn't read as pure execution.
+        if(kl===10) cap += ' <span class="lever">+10 is the reward cap, so its field is stacked with players speed-farming for rewards — a tougher bar than higher keys.</span>';
         box.append(el('<div class="contrib">'+cap+'</div>'));
         box.append(gradLegend());
       }
