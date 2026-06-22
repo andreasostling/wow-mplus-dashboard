@@ -764,7 +764,7 @@ def _intime_sorted(client, enc: int, cls: str, spec: str, metric: str,
     The benchmark should be "what timed-key players do", so drop runs whose duration
     exceeds the dungeon timer (depleted/over-time keys) — they'd drag the field down and
     aren't the comparison we want. timer_ms<=0 means we don't know the timer → keep all."""
-    ck = (enc, cls, spec, metric)
+    ck = (enc, cls, spec, metric, key_level)
     if cache is not None and ck in cache:
         return cache[ck]
     rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level,
@@ -826,47 +826,40 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
                                     else "below_field" if pctile <= 10 else "plausible")
 
 
-def role_field_benchmarks(client, summary: dict, runs: list[dict],
-                          key_level: int = 12, pages: int = 3) -> dict[str, dict]:
-    """+key_level field benchmarks for roster members the simmed-DPS path doesn't cover,
-    per dungeon (timed runs only). Two cases:
-
-    - The HEALER isn't simmed, so they get DPS (p90 "typical" + p50 median, matching the
-      DPS segment) AND HPS (p50 median — healing is comp/route-driven, so the median is
-      the fair 'typical').
-    - The TANK is simmed for DPS already, but not for healing; Brewmaster self-healing is
-      substantial, so they get HPS (p50 median) too.
-
-    Returns {dungeon: {player_name: bench}} where bench carries whichever of
-    top12_typical/median/best/n and hps_typical/best/n apply. Merged into the debrief's
-    per-player lookup (augmenting the simmed tank's dict, creating the healer's)."""
-    roster: dict[str, tuple[str, str, str]] = {}   # name -> (class, spec, role)
+def field_benchmarks_by_key(client, runs: list[dict], pages: int = 3) -> dict[str, dict]:
+    """Field DPS (p10/p50/p90) and HPS (p50) per roster player, indexed by dungeon AND the
+    run's KEY LEVEL — because DPS scales with key level (more enemy HP), so a +9 run must be
+    measured against the +9 field, not a fixed +12. Only the (dungeon, key) pairs we actually
+    ran are fetched, timed runs only. Returns {dungeon: {str(key): {player: bench}}}; the run
+    debrief picks bench by the selected run's own key. The +12-attached sim benchmarks stay
+    for the sim-vs-field realism flag (sim is modelled at +12)."""
+    roster: dict[str, tuple[str, str, str]] = {}
     for r in runs:
         for p in r.get("party", []):
-            if p.get("class") and p.get("spec") and p.get("name") not in roster:
-                roster[p["name"]] = (p["class"], p["spec"], p.get("role", "dps"))
+            if p.get("class") and p.get("spec"):
+                roster.setdefault(p["name"], (p["class"], p["spec"], p.get("role", "dps")))
+    pairs: dict[str, set[int]] = {}
+    for r in runs:
+        if r.get("dungeon") and r.get("key_level"):
+            pairs.setdefault(r["dungeon"], set()).add(int(r["key_level"]))
     out: dict[str, dict] = {}
     cache: dict[tuple, list[float]] = {}
-    for dungeon in (summary.get("by_dungeon") or {}):
+    for dungeon, keys in pairs.items():
         enc = MPLUS_ENCOUNTERS.get(dungeon)
         if not enc:
             continue
         timer_ms = (_timer_for(dungeon) or 0) * 1000
-        for name, (cls, spec, role) in roster.items():
-            want_dps = role == "healer"             # healer isn't simmed → needs DPS here
-            want_hps = role in ("healer", "tank")   # healing benchmark for both
-            bench: dict[str, Any] = {"player": name, "spec": f"{spec} {cls}", "role": role,
-                                     "top12_key": key_level}
-            if want_dps:
-                dps = _intime_sorted(client, enc, cls, spec, "dps", key_level, pages, timer_ms, cache)
+        for key in sorted(keys):
+            for name, (cls, spec, role) in roster.items():
+                bench: dict[str, Any] = {"player": name, "spec": f"{spec} {cls}", "role": role, "key": key}
+                dps = _intime_sorted(client, enc, cls, spec, "dps", key, pages, timer_ms, cache)
                 if dps:
-                    bench.update(top12_typical=round(_p90(dps)), top12_median=round(statistics.median(dps)),
-                                 top12_p10=round(_p10(dps)), top12_best=round(dps[0]), top12_n=len(dps))
-            if want_hps:
-                hps = _intime_sorted(client, enc, cls, spec, "hps", key_level, pages, timer_ms, cache)
-                if hps:
-                    bench.update(hps_typical=round(statistics.median(hps)),  # p50
-                                 hps_best=round(hps[0]), hps_n=len(hps))
-            if len(bench) > 4:  # got at least one metric beyond the identity keys
-                out.setdefault(dungeon, {})[name] = bench
+                    bench.update(top12_p10=round(_p10(dps)), top12_median=round(statistics.median(dps)),
+                                 top12_typical=round(_p90(dps)), top12_best=round(dps[0]), top12_n=len(dps))
+                if role in ("healer", "tank"):
+                    hps = _intime_sorted(client, enc, cls, spec, "hps", key, pages, timer_ms, cache)
+                    if hps:
+                        bench.update(hps_typical=round(statistics.median(hps)), hps_n=len(hps))
+                if len(bench) > 4:
+                    out.setdefault(dungeon, {}).setdefault(str(key), {})[name] = bench
     return out

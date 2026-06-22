@@ -472,7 +472,7 @@ def cmd_simc(args) -> int:
     # Build summary and emit
     import json
     sim_summary = simc.build_simc_summary(all_sim_results)
-    healer_bench: dict[str, dict] = {}
+    field_by_key: dict[str, dict] = {}
     # Real top-player DPS at the sim's key level → "how far off is the SimC ceiling?".
     if sim_summary.get("by_dungeon"):
         kl = cfg.simc.key_level
@@ -485,19 +485,21 @@ def cmd_simc(args) -> int:
                     print(f"    {dn[:18]:18} {p['player']:12} sim {p['dps']/1000:6.0f}k  vs +{kl} "
                           f"typical {p['top12_typical']/1000:5.0f}k / best {p['top12_best']/1000:5.0f}k  "
                           f"(sim is {gap}% of the typical +{kl} logger)", file=sys.stderr)
-        # Field benchmarks for roster members the simmed-DPS path doesn't cover: the
-        # un-simmed healer (DPS + HPS) and the tank's healing (HPS). Needs the roster's
-        # class/spec/role, which lives on the analysis runs.
+        # Per-key field benchmarks: each run is measured against ITS OWN key level's field
+        # (DPS scales with key, so a +9 run vs the +12 field reads far too low). Covers the
+        # un-simmed healer (DPS+HPS) and the tank's healing too. Needs the roster + per-run
+        # key levels, which live on the analysis runs.
         analysis_path = cfg.out_dir / "analysis.json"
         if analysis_path.exists():
             try:
                 runs_for_bench = json.loads(analysis_path.read_text(encoding="utf-8")).get("runs", [])
-                healer_bench = simc.role_field_benchmarks(client, sim_summary, runs_for_bench, key_level=kl)
+                print("  fetching per-key field benchmarks (each run vs its own key level)…", file=sys.stderr)
+                field_by_key = simc.field_benchmarks_by_key(client, runs_for_bench)
             except (json.JSONDecodeError, OSError):
                 pass
 
     # Write results
-    _emit_simc(cfg, sim_summary, all_route_analyses, profiles, healer_bench)
+    _emit_simc(cfg, sim_summary, all_route_analyses, profiles, field_by_key)
     return 0
 
 
@@ -506,7 +508,7 @@ def _emit_simc(
     sim_summary: dict,
     route_analyses: dict[str, dict],
     profiles: list[simc.PlayerProfile],
-    field_benchmarks: dict[str, dict] | None = None,
+    field_by_key: dict[str, dict] | None = None,
 ) -> None:
     """Write simc results to JSON and integrate into the dashboard."""
     import json
@@ -515,7 +517,7 @@ def _emit_simc(
         "sim_results": sim_summary,
         "route_analyses": route_analyses,
         "profiles": {p.name: {"spec": p.spec, "class": p.simc_class, "role": p.role} for p in profiles},
-        "field_benchmarks": field_benchmarks or {},
+        "field_by_key": field_by_key or {},
     }
 
     # Write standalone simc JSON

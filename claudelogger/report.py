@@ -1349,6 +1349,8 @@ render();
   const fmtMin = (s)=>{s=Math.max(0,Math.round(s||0));return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;};
   const rsel = document.getElementById('fRun');
   // Sim ceiling lookup by normalized dungeon + player (only if SimC data is present).
+  // simLookup: the SimC ceiling + sim-vs-field realism (sim is modelled at +12), by
+  // dungeon+player. The run-relative percentile benchmarks live in fieldLookup below.
   const simLookup = {}; const SIMC = DATA.simc;
   if(SIMC && SIMC.sim_results && SIMC.sim_results.by_dungeon){
     for(const [dn, ds] of Object.entries(SIMC.sim_results.by_dungeon)){
@@ -1356,15 +1358,13 @@ render();
       (ds.players||[]).forEach(p=>{ simLookup[k][p.player] = p; });
     }
   }
-  // Field benchmarks for roster members the sim path doesn't cover: the un-simmed healer
-  // (DPS + HPS) and the tank's healing (HPS). Merge (augment) so the simmed tank keeps its
-  // DPS ceiling while gaining hps_typical; the healer's entry is created fresh.
-  if(SIMC && SIMC.field_benchmarks){
-    for(const [dn, players] of Object.entries(SIMC.field_benchmarks)){
-      const k = dnorm(dn); simLookup[k] = simLookup[k] || {};
-      for(const [pn, b] of Object.entries(players||{})){
-        simLookup[k][pn] = Object.assign(simLookup[k][pn]||{}, b);
-      }
+  // fieldLookup: field p10/p50/p90 (DPS) and p50 (HPS) keyed by dungeon → key level →
+  // player. Each run is benchmarked against ITS OWN key level — DPS scales with key, so a
+  // +9 run vs the +12 field reads far too low. dnorm(dungeon) → {keyStr: {player: bench}}.
+  const fieldLookup = {};
+  if(SIMC && SIMC.field_by_key){
+    for(const [dn, byKey] of Object.entries(SIMC.field_by_key)){
+      fieldLookup[dnorm(dn)] = byKey;
     }
   }
   const debriefRuns = RUNS.map((r,i)=>({r,i})).filter(x=>x.r.timing && Object.keys(x.r.timing).length);
@@ -1416,9 +1416,11 @@ render();
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
+      const kl = r.key_level||12;
+      // Field percentiles for THIS run's key level (not a fixed +12 — DPS scales with key).
+      const field = (fieldLookup[dnorm(r.dungeon)]||{})[String(kl)] || {};
       const ordered = names.slice().sort((a,b)=>dps[b].run_dps-dps[a].run_dps);
       const roleTag = n => dps[n].role==='tank'?' 🛡️':dps[n].role==='healer'?' 💚':'';
-      const kl = (sims[ordered[0]]||{}).top12_key||12;
       const actTitle = a => `actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS`;
       if(!haveSim){
         box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS</h3>'));
@@ -1429,13 +1431,13 @@ render();
             <span class="track"><span class="act" style="width:${actW}%" title="${actTitle(a)}"></span></span>
             <span class="muted" style="font-size:12px">${Math.round(a.run_dps/1000)}k</span></div>`)); });
       } else {
-        box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs typical +${kl} &amp; your SimC ceiling</h3>`));
-        // Sort by the typical-+kl logger benchmark (descending), not actual run-DPS.
-        const ordTyp = names.slice().sort((a,b)=>((sims[b]||{}).top12_typical||0)-((sims[a]||{}).top12_typical||0));
-        let mx=1; ordTyp.forEach(n=>{ const s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, s.top12_typical||0, s.dps||0); });
+        box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs the +${kl} field &amp; your SimC ceiling</h3>`));
+        // Sort by the typical (p90) +kl field benchmark (descending), not actual run-DPS.
+        const ordTyp = names.slice().sort((a,b)=>((field[b]||{}).top12_typical||0)-((field[a]||{}).top12_typical||0));
+        let mx=1; ordTyp.forEach(n=>{ const f=field[n]||{}; mx=Math.max(mx, dps[n].run_dps, f.top12_typical||0, (sims[n]||{}).dps||0); });
         let anyHot=false;
         ordTyp.forEach(n=>{
-          const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, med=s.top12_median||0, lo=s.top12_p10||0, ceil=s.dps||0;
+          const a=dps[n], s=sims[n]||{}, f=field[n]||{}, top=f.top12_typical||0, med=f.top12_median||0, lo=f.top12_p10||0, ceil=s.dps||0;
           const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0,
                 medW=med>0?Math.round(100*med/mx):0, loW=lo>0?Math.round(100*lo/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
           const pctLo=lo>0?Math.round(100*a.run_dps/lo):null;
@@ -1467,9 +1469,9 @@ render();
             <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${loMark}${medMark}${topMark}${tipLabel}</span>
             <span class="muted meta">${meta}</span></div>`));
         });
-        let cap = '<span style="color:#5e87a8">▎</span> = floor (p10) · <span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) +'+kl+' WCL logger · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling.';
+        let cap = '<span style="color:#5e87a8">▎</span> = floor (p10) · <span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) of the +'+kl+' WCL field · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling (a +12 gear-potential model — fixed, so % sim runs low on lower keys).';
         if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
-        cap += ' <span class="muted">Field = timed +'+kl+' runs only. WCL = Warcraft Logs.</span>';
+        cap += ' <span class="muted">Field = timed +'+kl+' runs only, benchmarked at each run&#39;s own key level. WCL = Warcraft Logs.</span>';
         box.append(el('<div class="contrib">'+cap+'</div>'));
         box.append(gradLegend());
       }
@@ -1481,15 +1483,15 @@ render();
     //     fair "typical", not the top decile. Mirrors the DPS bars otherwise.
     const hps = t.hps_actual||{}; const hnames = Object.keys(hps);
     if(hnames.length){
-      const hsims = simLookup[dnorm(r.dungeon)]||{};
-      const hkl = (Object.values(hsims).find(s=>s&&s.top12_key)||{}).top12_key||12;
+      const hkl = r.key_level||12;
+      const hfield = (fieldLookup[dnorm(r.dungeon)]||{})[String(hkl)] || {};   // this run's key
       const hord = hnames.slice().sort((a,b)=>hps[b].run_hps-hps[a].run_hps);
       const hRoleTag = n => hps[n].role==='tank'?' 🛡️':hps[n].role==='healer'?' 💚':'';
       box.append(el(`<h3 class="muted" style="margin:16px 0 6px">💚 HPS — healing vs the median (p50) +${hkl} healer/tank</h3>`));
-      let mxH=1; hord.forEach(n=>{ const s=hsims[n]||{}; mxH=Math.max(mxH, hps[n].run_hps, s.hps_typical||0); });
+      let mxH=1; hord.forEach(n=>{ const s=hfield[n]||{}; mxH=Math.max(mxH, hps[n].run_hps, s.hps_typical||0); });
       let anyBench=false;
       hord.forEach(n=>{
-        const h=hps[n], s=hsims[n]||{}, typ=s.hps_typical||0;
+        const h=hps[n], s=hfield[n]||{}, typ=s.hps_typical||0;
         const actW=Math.round(100*h.run_hps/mxH), typW=typ>0?Math.round(100*typ/mxH):0;
         const pctT=typ>0?Math.round(100*h.run_hps/typ):null; if(typ>0) anyBench=true;
         const typMark = typ>0?`<span title="median (p50) +${hkl} ${esc(n)} ${s.role==='tank'?'tank':'healer'}: ${Math.round(typ).toLocaleString()} HPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--mut);left:calc(${typW}% - 1px)"></span>`:'';
