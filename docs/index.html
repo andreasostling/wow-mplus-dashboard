@@ -692,6 +692,7 @@ render();
         });
         let cap = '<span style="color:#e0a040">▎</span> = typical +'+kl+' logger (p90 WCL run-DPS, real-player context) · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear (gear-fair target).';
         if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
+        cap += ' <span class="muted">WCL = Warcraft Logs.</span>';
         box.append(el('<div class="contrib">'+cap+'</div>'));
       }
     }
