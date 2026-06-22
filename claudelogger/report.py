@@ -1406,8 +1406,8 @@ render();
           const ceilRegion = ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:'';
           const topMark = top>0?`<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
           const bits=[];
-          if(pctT!==null) bits.push(`<span class="${pctClass(pctT)}" title="vs typical +${kl} logger">${pctT}% typ</span>`);
-          if(pctC!==null) bits.push(`<span class="${pctClass(pctC)}" title="vs your SimC ceiling">${pctC}% ceil</span>`);
+          if(pctT!==null) bits.push(`<span class="${pctClass(pctT)}" title="vs the p90 (typical) +${kl} WCL logger">${pctT}% p90 WCL</span>`);
+          if(pctC!==null) bits.push(`<span class="${pctClass(pctC)}" title="vs your SimC ceiling">${pctC}% sim</span>`);
           const txt = `${Math.round(a.run_dps/1000)}k${bits.length?' · '+bits.join(' · '):''}${hotMark}`;
           box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
             <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}"></span>${topMark}</span>
