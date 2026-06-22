@@ -781,6 +781,10 @@ def _p90(vals: list[float]) -> float:
     return statistics.quantiles(vals, n=10, method="inclusive")[8] if len(vals) >= 2 else vals[0]
 
 
+def _p10(vals: list[float]) -> float:
+    return statistics.quantiles(vals, n=10, method="inclusive")[0] if len(vals) >= 2 else vals[0]
+
+
 def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int = 3) -> None:
     """Add real-player DPS at the given key level to each simmed player, so the dashboard
     can show how far the SimC ceiling is from real play. Mutates summary in place (player
@@ -812,6 +816,7 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
                 p["top12_best"] = round(dps[0])
                 p["top12_typical"] = round(_p90(dps))     # field p90 ("strong logger")
                 p["top12_median"] = round(statistics.median(dps))  # field p50 (middle of the timed field)
+                p["top12_p10"] = round(_p10(dps))         # field p10 (floor of the timed field)
                 p["top12_n"] = len(dps)
                 p["top12_key"] = key_level
                 p["sim_pctile"] = pctile  # where the sim DPS sits within the real field
@@ -856,7 +861,7 @@ def role_field_benchmarks(client, summary: dict, runs: list[dict],
                 dps = _intime_sorted(client, enc, cls, spec, "dps", key_level, pages, timer_ms, cache)
                 if dps:
                     bench.update(top12_typical=round(_p90(dps)), top12_median=round(statistics.median(dps)),
-                                 top12_best=round(dps[0]), top12_n=len(dps))
+                                 top12_p10=round(_p10(dps)), top12_best=round(dps[0]), top12_n=len(dps))
             if want_hps:
                 hps = _intime_sorted(client, enc, cls, spec, "hps", key_level, pages, timer_ms, cache)
                 if hps:

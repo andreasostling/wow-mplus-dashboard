@@ -782,7 +782,7 @@ _HTML = r"""<!doctype html>
   .pull-bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:14px;overflow:hidden;position:relative}
   .pull-bar .fill{display:block;height:100%;min-width:2px}
   .fill-trash{background:var(--accent)} .fill-boss{background:var(--bad)}
-  .gapbar{display:grid;grid-template-columns:140px 1fr 230px;gap:8px;align-items:center;margin:3px 0}
+  .gapbar{display:grid;grid-template-columns:130px 1fr 275px;gap:8px;align-items:center;margin:3px 0}
   .gapbar .track{position:relative;background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
   .gapbar .ceil{position:absolute;inset:0;background:#1d2530}
   .gapbar .act{position:absolute;left:0;top:0;bottom:0;background:var(--accent);min-width:2px;display:flex;align-items:center;justify-content:flex-end}
@@ -837,6 +837,13 @@ _HTML = r"""<!doctype html>
     <select id="fDungeon"><option value="">All dungeons</option></select>
     <select id="fPlayer"><option value="">All players</option></select>
     <select id="fBucket"><option value="">All causes</option></select>
+    <select id="fTime" title="Filter deaths by how recently the run happened">
+      <option value="0">All time</option>
+      <option value="7">Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+    </select>
+    <label class="muted" title="Keep the most recent run visible even if it falls outside the time window"><input type="checkbox" id="fLatest" checked> always include latest run</label>
     <label class="muted"><input type="checkbox" id="fAvoid"> avoidable only</label>
     <label class="muted"><input type="checkbox" id="fHideCascade" checked> hide wipe-cascade</label>
   </div>
@@ -900,7 +907,9 @@ const DATA = /*DATA*/;
 const S = DATA.season, RUNS = DATA.runs;
 const rows = [];
 for (const r of RUNS) for (const d of r.deaths)
-  rows.push(Object.assign({dungeon:r.dungeon, key:r.key_level, report:r.report}, d));
+  rows.push(Object.assign({dungeon:r.dungeon, key:r.key_level, report:r.report, date_ms:r.date_ms||0}, d));
+// Most recent run (by fight start) — the "always include latest run" toggle keys off this.
+const latestRunMs = Math.max(0, ...RUNS.map(r=>r.date_ms||0));
 
 const bucketLabel = {
   interruptible_cast_not_kicked:["Interrupt","b-interrupt"],
@@ -1287,7 +1296,13 @@ Object.keys(bucketLabel).forEach(k=>document.getElementById('fBucket')
 let sortK='time_in_fight_s', sortDir=1;
 function render(){
   const fd=fDungeon.value,fp=fPlayer.value,fb=fBucket.value,fa=fAvoid.checked,fhc=fHideCascade.checked;
-  let r=rows.filter(x=>(!fd||x.dungeon===fd)&&(!fp||x.player===fp)&&(!fb||x.bucket===fb)&&(!fa||x.avoidable===true)&&(!fhc||!x.is_cascade));
+  // Time window (days back from now); "always include latest run" keeps the most recent
+  // run visible regardless, so a tight window never hides the freshest data.
+  const days=+document.getElementById('fTime').value||0;
+  const keepLatest=document.getElementById('fLatest').checked;
+  const cutoff=days?Date.now()-days*86400000:0;
+  const timeOk=x=>(!cutoff||x.date_ms>=cutoff)||(keepLatest&&x.date_ms===latestRunMs);
+  let r=rows.filter(x=>(!fd||x.dungeon===fd)&&(!fp||x.player===fp)&&(!fb||x.bucket===fb)&&(!fa||x.avoidable===true)&&(!fhc||!x.is_cascade)&&timeOk(x));
   r.sort((a,b)=>{let x=a[sortK],y=b[sortK];return (x>y?1:x<y?-1:0)*sortDir;});
   const tb=document.querySelector('#deaths tbody'); tb.innerHTML='';
   r.forEach(d=>{
@@ -1323,7 +1338,7 @@ function render(){
 }
 document.querySelectorAll('#deaths th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; sortDir=(sortK===k)?-sortDir:1; sortK=k; render();});
-['fDungeon','fPlayer','fBucket','fAvoid','fHideCascade'].forEach(id=>document.getElementById(id).onchange=render);
+['fDungeon','fPlayer','fBucket','fTime','fLatest','fAvoid','fHideCascade'].forEach(id=>document.getElementById(id).onchange=render);
 const fDungeonSel = document.getElementById('fDungeon');
 fDungeonSel.onchange = ()=>{ render(); syncDungeon(fDungeonSel.value, fDungeonSel); };
 registerDungeonSelect(fDungeonSel, render);
@@ -1420,19 +1435,23 @@ render();
         let mx=1; ordTyp.forEach(n=>{ const s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, s.top12_typical||0, s.dps||0); });
         let anyHot=false;
         ordTyp.forEach(n=>{
-          const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, med=s.top12_median||0, ceil=s.dps||0;
+          const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, med=s.top12_median||0, lo=s.top12_p10||0, ceil=s.dps||0;
           const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0,
-                medW=med>0?Math.round(100*med/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
+                medW=med>0?Math.round(100*med/mx):0, loW=lo>0?Math.round(100*lo/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
+          const pctLo=lo>0?Math.round(100*a.run_dps/lo):null;
           const pctMed=med>0?Math.round(100*a.run_dps/med):null;
           const pctT=top>0?Math.round(100*a.run_dps/top):null;
           const pctC=ceil>0?Math.round(100*a.run_dps/ceil):null;
           const hot = s.sim_realism==='optimistic'; if(hot) anyHot=true;
           const hotMark = hot?` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — ceiling likely optimistic">⚠</span>`:'';
           const ceilRegion = ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:'';
-          // Two field markers: p50 (grey, median) and p90 (orange, strong logger).
-          const medMark = med>0?`<span title="median (p50) +${kl} ${esc(n)} log: ${Math.round(med).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--mut);left:calc(${medW}% - 1px)"></span>`:'';
-          const topMark = top>0?`<span title="typical (p90) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
+          // Three field markers: p10 (blue, floor) · p50 (grey, median) · p90 (orange, strong).
+          const fmark = (v,vW,col,lab) => v>0?`<span title="${lab} +${kl} ${esc(n)} log: ${Math.round(v).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:${col};left:calc(${vW}% - 1px)"></span>`:'';
+          const loMark = fmark(lo,loW,'#5e87a8','floor (p10)');
+          const medMark = fmark(med,medW,'var(--mut)','median (p50)');
+          const topMark = fmark(top,topW,'#e0a040','typical (p90)');
           const bits=[];
+          if(pctLo!==null) bits.push(pctSpan(pctLo, `vs the p10 (field floor) +${kl} WCL logger`)+' p10</span>');
           if(pctMed!==null) bits.push(pctSpan(pctMed, `vs the p50 (median) +${kl} WCL logger`)+' p50</span>');
           if(pctT!==null) bits.push(pctSpan(pctT, `vs the p90 (typical) +${kl} WCL logger`)+' p90 WCL</span>');
           if(pctC!==null) bits.push(pctSpan(pctC, 'vs your SimC ceiling')+' sim</span>');
@@ -1445,10 +1464,10 @@ render();
           const tipLabel = inside?'':`<span class="lbl-out" style="left:${actW}%">${dpsStr}</span>`;
           const meta = `${bits.join(' · ')}${hotMark}`;
           box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
-            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${medMark}${topMark}${tipLabel}</span>
+            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${loMark}${medMark}${topMark}${tipLabel}</span>
             <span class="muted meta">${meta}</span></div>`));
         });
-        let cap = '<span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) +'+kl+' WCL logger · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear (gear-fair target).';
+        let cap = '<span style="color:#5e87a8">▎</span> = floor (p10) · <span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) +'+kl+' WCL logger · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling.';
         if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
         cap += ' <span class="muted">Field = timed +'+kl+' runs only. WCL = Warcraft Logs.</span>';
         box.append(el('<div class="contrib">'+cap+'</div>'));
