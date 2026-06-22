@@ -399,11 +399,14 @@ def fetch_player_ilvls(client: WCLClient, code: str, fight_id: int) -> dict[str,
     `report`/`fightID`, and `playerDetails` (same query `get_roles` uses, so the cache is
     shared) exposes `maxItemLevel` per player — exactly the number the WCL web UI shows.
     One query per report; everything caches, so a field-wide ilvl join is a one-time cost.
-    Returns {} if the fight has no player details (older/partial logs)."""
+    Returns {} if the fight has no player details (older/partial logs) or the report can't be
+    read — many ranked reports are PRIVATE, and the WCL query then raises a permission error;
+    a single field row's ilvl is non-critical, so we swallow any failure and skip that report
+    (the capped sample just loses that row, falling back to the full field if too thin)."""
     try:
         res = client.query(_ROLES_Q, {"code": code, "fight": fight_id})
         pd = res["data"]["reportData"]["report"]["playerDetails"]["data"]["playerDetails"]
-    except (KeyError, TypeError):
+    except Exception:
         return {}
     out: dict[str, int] = {}
     for key in ("tanks", "healers", "dps"):
