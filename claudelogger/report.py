@@ -1455,16 +1455,21 @@ render();
         box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs the +${kl} field &amp; your SimC ceiling</h3>`));
         // Sort by the typical (p90) +kl field benchmark (descending), not actual run-DPS.
         const ordTyp = names.slice().sort((a,b)=>((field[b]||{}).top12_typical||0)-((field[a]||{}).top12_typical||0));
-        let mx=1; ordTyp.forEach(n=>{ const f=field[n]||{}; mx=Math.max(mx, dps[n].run_dps, f.top12_typical||0, (sims[n]||{}).dps||0); });
-        let anyHot=false;
+        let mx=1; ordTyp.forEach(n=>{ const f=field[n]||{}, s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, f.top12_typical||0, s.dps||0, s.bis_dps||0); });
+        let anyHot=false, anyBis=false, anyPeer=false, peerDelta=null;
         ordTyp.forEach(n=>{
           const a=dps[n], s=sims[n]||{}, f=field[n]||{}, top=f.top12_typical||0, med=f.top12_median||0, lo=f.top12_p10||0, ceil=s.dps||0;
+          const bis=s.bis_dps||0, upside=s.bis_upside_pct||0;
+          // Gear-fair peer field: capped to ranked players within +N ilvl of this char.
+          const cap=f.ilvl_capped||null, capMed=(cap&&!cap.fallback)?(cap.median||0):0;
           const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0,
-                medW=med>0?Math.round(100*med/mx):0, loW=lo>0?Math.round(100*lo/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
+                medW=med>0?Math.round(100*med/mx):0, loW=lo>0?Math.round(100*lo/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0,
+                bisW=bis>0?Math.round(100*bis/mx):0, capMedW=capMed>0?Math.round(100*capMed/mx):0;
           const pctLo=lo>0?Math.round(100*a.run_dps/lo):null;
           const pctMed=med>0?Math.round(100*a.run_dps/med):null;
           const pctT=top>0?Math.round(100*a.run_dps/top):null;
           const pctC=ceil>0?Math.round(100*a.run_dps/ceil):null;
+          const pctPeer=capMed>0?Math.round(100*a.run_dps/capMed):null;
           const hot = s.sim_realism==='optimistic'; if(hot) anyHot=true;
           const hotMark = hot?` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — ceiling likely optimistic">⚠</span>`:'';
           const ceilRegion = ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:'';
@@ -1473,11 +1478,19 @@ render();
           const loMark = fmark(lo,loW,'#5e87a8','floor (p10)');
           const medMark = fmark(med,medW,'var(--mut)','median (p50)');
           const topMark = fmark(top,topW,'#e0a040','typical (p90)');
+          // Peer (ilvl-capped) median: teal marker — "what players at your gear do".
+          const peerMark = capMed>0?`<span title="median peer at your gear (≤ ${cap.cap_ilvl} ilvl, n=${cap.n}) +${kl} ${esc(n)}: ${Math.round(capMed).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#4fae8f;left:calc(${capMedW}% - 1px)"></span>`:'';
+          // BiS ceiling: purple marker — pure gear potential (your play, reference gear).
+          const bisMark = bis>0?`<span title="BiS ceiling: ${Math.round(bis).toLocaleString()} DPS (${esc(s.bis_variant||'reference')}) — your play with reference gear, +${upside}% over your actual-gear sim" style="position:absolute;top:-3px;bottom:-3px;width:2px;background:#a06fd0;left:calc(${bisW}% - 1px)"></span>`:'';
+          if(bis>0) anyBis=true; if(capMed>0){ anyPeer=true; peerDelta=cap.cap_ilvl-cap.baseline_ilvl; }
           const bits=[];
           if(pctLo!==null) bits.push(pctSpan(pctLo, `vs the p10 (field floor) +${kl} WCL logger`)+' p10</span>');
           if(pctMed!==null) bits.push(pctSpan(pctMed, `vs the p50 (median) +${kl} WCL logger`)+' p50</span>');
+          if(pctPeer!==null) bits.push(pctSpan(pctPeer, `vs the median peer within +${cap.cap_ilvl-cap.baseline_ilvl} ilvl of your ${cap.baseline_ilvl} (gear-fair, n=${cap.n})`)+' peers@ilvl</span>');
           if(pctT!==null) bits.push(pctSpan(pctT, `vs the p90 (typical) +${kl} WCL logger`)+' p90 WCL</span>');
           if(pctC!==null) bits.push(pctSpan(pctC, 'vs your SimC ceiling')+' sim</span>');
+          if(bis>0) bits.push(`<span class="lever" title="BiS ceiling ${Math.round(bis).toLocaleString()} DPS (${esc(s.bis_variant||'reference')}) — pure gear upside over your actual-gear sim">+${upside}% gear</span>`);
+          else if(cap&&cap.fallback) bits.push(`<span class="muted" title="only ${cap.n} ranked +${kl} ${esc(n)} players within +${cap.cap_ilvl-cap.baseline_ilvl} ilvl of your ${cap.baseline_ilvl} — too few for a stable peer median, showing the full field">peers@ilvl n/a</span>`);
           // DPS number always rides the bar: inside the blue bar (dark, right-aligned)
           // when there's room, else just past its tip in the track (light). The meta
           // column keeps only the % deltas, so it never overflows.
@@ -1487,10 +1500,12 @@ render();
           const tipLabel = inside?'':`<span class="lbl-out" style="left:${actW}%">${dpsStr}</span>`;
           const meta = `${bits.join(' · ')}${hotMark}`;
           box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
-            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${loMark}${medMark}${topMark}${tipLabel}</span>
+            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${loMark}${medMark}${peerMark}${topMark}${bisMark}${tipLabel}</span>
             <span class="muted meta">${meta}</span></div>`));
         });
         let cap = '<span style="color:#5e87a8">▎</span> = floor (p10) · <span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) of the +'+kl+' WCL field · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling (a +12 gear-potential model — fixed, so % sim runs low on lower keys).';
+        if(anyPeer) cap += ' <span style="color:#4fae8f">▎</span> = median peer at <em>your</em> item level (gear-fair: ranked players within +'+(peerDelta||1)+' ilvl of your char) — read this gap as play, not gear.';
+        if(anyBis) cap += ' <span style="color:#a06fd0">▎</span> = your BiS ceiling (your play + reference top gear, on this route) — the gap from your actual-gear sim is pure gear upside.';
         if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
         cap += ' <span class="muted">Field = timed +'+kl+' runs only, benchmarked at each run&#39;s own key level. WCL = Warcraft Logs.</span>';
         // +10 is the last reward threshold, so strong players speed-farm fast +10s for the
@@ -1639,8 +1654,9 @@ function renderSimcDps(){
         const hot=p.sim_realism==='optimistic'?` <span class="low" title="our sim is at the ${p.sim_pctile}th percentile of the real +${k} field — likely optimistic for this spec">⚠</span>`:'';
         vs=`<span style="display:inline-block;width:90px;height:11px;background:var(--card);border:1px solid var(--line);border-radius:4px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:var(--accent)"></span></span> <span class="${cls}">${pct}%</span>${hot}`;
       }
+      const bisCell = p.bis_dps?`<br><span class="lever" title="BiS ceiling (${esc(p.bis_variant||'reference')}) — your play + reference top gear on this route; gap from the actual-gear sim is pure gear">BiS ${Math.round(p.bis_dps/1000)}k <span class="muted">+${p.bis_upside_pct||0}%</span></span>`:'';
       tb.append(el(`<tr><td>${esc(d)}</td><td>${esc(p.player)}</td><td>${esc(p.spec)}</td>
-        <td>${Math.round(p.dps).toLocaleString()}</td><td>${topCell}</td><td>${vs}</td>
+        <td>${Math.round(p.dps).toLocaleString()}${bisCell}</td><td>${topCell}</td><td>${vs}</td>
         <td>${esc(roleLabel)}${roleTag}</td></tr>`));
     });
     if((ds.players||[]).length>1){

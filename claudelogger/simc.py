@@ -246,6 +246,73 @@ def extract_profiles(
     return profiles
 
 
+# --- BiS-ceiling sims (Feature A) -------------------------------------------------
+# SimC's bundled reference profiles (profiles/MID1/MID1_<Class>_<Spec>[_variant].simc) carry
+# fully-itemized BiS gear — the same set the guide sites recommend, but machine-readable and
+# guaranteed to parse in our exact binary. We lift only the gear lines onto each player's own
+# profile (their talents/spec/route unchanged) to estimate the pure gear ceiling.
+
+# simc_class (lowercase, as in SPEC_MAP) → the Class token used in MID1 filenames.
+_MID1_CLASS_TOKEN = {
+    "deathknight": "Death_Knight", "demonhunter": "Demon_Hunter", "druid": "Druid",
+    "evoker": "Evoker", "hunter": "Hunter", "mage": "Mage", "monk": "Monk",
+    "paladin": "Paladin", "priest": "Priest", "rogue": "Rogue", "shaman": "Shaman",
+    "warlock": "Warlock", "warrior": "Warrior",
+}
+
+# Real equippable slots whose lines we lift (skip shirt/tabard — no stats). The reference
+# profiles use the plural `shoulders`/`wrists`; WCL-extracted profiles use the singular — both
+# are valid simc tokens, so accept either spelling.
+_BIS_GEAR_SLOTS = ("head", "neck", "shoulder", "shoulders", "back", "chest", "waist", "legs",
+                   "feet", "wrist", "wrists", "hands", "finger1", "finger2", "trinket1",
+                   "trinket2", "main_hand", "off_hand")
+_BIS_SLOT_RE = re.compile(rf"^({'|'.join(_BIS_GEAR_SLOTS)})=", re.IGNORECASE)
+
+
+def reference_profiles_dir(knobs: SimcKnobs) -> Path | None:
+    """Resolve the SimC reference-profile dir (MID1): the configured path, else the binary's
+    sibling ``profiles/MID1`` (binary lives at ``<root>/build/simc``). None if not found."""
+    if knobs.reference_profiles_dir:
+        d = Path(knobs.reference_profiles_dir).expanduser()
+        return d if d.is_dir() else None
+    binary = Path(knobs.simc_binary).expanduser()
+    # <root>/build/simc → <root>/profiles/MID1
+    cand = binary.parent.parent / "profiles" / "MID1"
+    return cand if cand.is_dir() else None
+
+
+def _extract_gear_lines(profile_text: str) -> list[str]:
+    """Pull the equippable-slot gear lines out of a reference .simc profile (in file order)."""
+    return [ln.strip() for ln in profile_text.splitlines()
+            if _BIS_SLOT_RE.match(ln.strip())]
+
+
+def bis_gear_variants(simc_class: str, spec: str, knobs: SimcKnobs) -> list[tuple[str, list[str]]]:
+    """All BiS gear sets for a spec from the reference profiles: [(variant_label, gear_lines)].
+
+    Matches ``MID1_<Class>_<Spec>*.simc`` so multi-variant specs (e.g. Destruction /
+    Destruction_Diabolist / Destruction_Hellcaller) each yield a candidate; the caller sims
+    each and keeps the best. Empty list if the dir or spec profile is missing."""
+    pdir = reference_profiles_dir(knobs)
+    cls_token = _MID1_CLASS_TOKEN.get(simc_class)
+    if not pdir or not cls_token:
+        return []
+    spec_token = spec.title()
+    prefix = f"MID1_{cls_token}_{spec_token}"
+    out: list[tuple[str, list[str]]] = []
+    for path in sorted(pdir.glob(f"{prefix}*.simc")):
+        # A neighbouring spec must not sneak in (e.g. Frost vs Frostfire is fine — both are
+        # Frost variants — but guard the char right after the spec token is _ or end).
+        rest = path.stem[len(prefix):]
+        if rest and not rest.startswith("_"):
+            continue
+        gear = _extract_gear_lines(path.read_text(encoding="utf-8"))
+        if gear:
+            label = path.stem[len(f"MID1_{cls_token}_"):]  # e.g. "Frost", "Destruction_Hellcaller"
+            out.append((label, gear))
+    return out
+
+
 def apply_lust_overrides(route_text: str, pulls: list[int]) -> str:
     """Force ``bloodlust=1`` on the given pull numbers in a route's pull lines.
 
@@ -460,6 +527,64 @@ def build_combined_profile(
     return "\n\n".join(sections) + "\n"
 
 
+def _talents_for(profile: "PlayerProfile", overrides_path: Path | None) -> str:
+    """The player's `talents=` value — from WCL (rare) or the override file (the usual
+    source). Empty string if none, in which case a BiS sim can't run (no rotation)."""
+    if profile.talent_hash:
+        return profile.talent_hash
+    if overrides_path and overrides_path.exists():
+        for ln in overrides_path.read_text(encoding="utf-8").splitlines():
+            s = ln.strip()
+            if s.startswith("talents="):
+                return s.split("=", 1)[1].strip()
+    return ""
+
+
+def build_bis_profile(profile: "PlayerProfile", gear_lines: list[str], talents: str,
+                      route_text: str, knobs: SimcKnobs) -> str:
+    """A BiS-ceiling sim input: the player's class/spec/role/talents with reference (BiS)
+    gear swapped in, on the given (already buff-injected, HP-scaled) route.
+
+    Deliberately bypasses the full-profile override path (which would re-assert the player's
+    *actual* gear and defeat the swap): we keep only the talents from the override and pair
+    them with the BiS gear. Consumables/sim-settings mirror build_combined_profile, but with
+    the lighter `bis_iterations` — this is a ceiling estimate, not a headline number."""
+    char = [
+        f'{profile.simc_class}="{profile.name}_BiS"',
+        f"level={profile.level}",
+        f"race={profile.race}",
+        f"spec={profile.spec}",
+        f"role={profile.role}",
+    ]
+    if talents:
+        char.append(f"talents={talents}")
+    sections = [f"# {profile.name} — BiS ceiling ({profile.spec} {profile.simc_class})",
+                "\n".join(char), "", "\n".join(gear_lines)]
+
+    cons = []
+    if knobs.flask:
+        cons.append(f"flask={knobs.flask}")
+    if knobs.food:
+        cons.append(f"food={knobs.food}")
+    if knobs.augmentation:
+        cons.append(f"augmentation={knobs.augmentation}")
+    if knobs.weapon_oil:
+        cons.append(f"temporary_enchant=main_hand:{knobs.weapon_oil}/off_hand:{knobs.weapon_oil}")
+    if cons:
+        sections.append("# Consumables\n" + "\n".join(cons))
+
+    sections.append("\n# Route configuration")
+    sections.append(route_text)
+
+    settings = ["\n# Sim settings", f"iterations={knobs.bis_iterations}",
+                f"target_error={knobs.target_error}"]
+    if knobs.threads > 0:
+        settings.append(f"threads={knobs.threads}")
+    settings.append("json2=simc_output.json")
+    sections.append("\n".join(settings))
+    return "\n\n".join(sections) + "\n"
+
+
 @dataclass
 class SimcResult:
     """Parsed results from a simc run."""
@@ -475,9 +600,12 @@ class SimcResult:
     per_pull: list[dict]  # per-pull breakdown if available
     raw_json: dict        # full simc JSON output
     html_path: Path | None  # path to HTML report
+    # BiS-ceiling sim (Feature A): same player/talents/route, reference (BiS) gear swapped in.
+    bis_dps: float = 0.0          # best variant's DPS (0 = not run)
+    bis_variant: str = ""         # which reference profile won (e.g. "Destruction_Hellcaller")
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "player": self.player_name,
             "spec": self.spec,
             "role": self.role,
@@ -490,6 +618,12 @@ class SimcResult:
             "per_pull": self.per_pull,
             "html_report": str(self.html_path) if self.html_path else None,
         }
+        if self.bis_dps:
+            d["bis_dps"] = round(self.bis_dps, 1)
+            d["bis_variant"] = self.bis_variant
+            # Gear upside: BiS ceiling as a % over the actual-gear sim (same route/talents/HP).
+            d["bis_upside_pct"] = round(100 * (self.bis_dps / self.dps - 1)) if self.dps else 0
+        return d
 
 
 def run_simc(
@@ -688,9 +822,41 @@ def run_dungeon_sims(
         raw = run_simc(combined, work_dir, input_name, cfg.simc)
         result = parse_simc_result(raw, profile.name, dungeon)
         if result:
+            if cfg.simc.bis_enabled and profile.role != "heal":
+                _attach_bis_ceiling(result, profile, use_route, dungeon, cfg,
+                                    overrides_path, work_dir, slug)
             results.append(result)
 
     return results
+
+
+def _attach_bis_ceiling(result: "SimcResult", profile: PlayerProfile, use_route: str,
+                        dungeon: str, cfg: Config, overrides_path: Path | None,
+                        work_dir: Path, slug: str) -> None:
+    """Re-sim the player on the SAME (HP-scaled, buff-injected) route with each reference BiS
+    gear set, keeping their talents — so the only thing that changed is gear and the DPS gap
+    is pure gear upside. Keeps the best-DPS variant. Sets result.bis_dps/bis_variant."""
+    variants = bis_gear_variants(profile.simc_class, profile.spec, cfg.simc)
+    talents = _talents_for(profile, overrides_path)
+    if not variants or not talents:
+        if not variants:
+            print(f"  simc: no reference (BiS) profile for {profile.spec} {profile.simc_class}; "
+                  f"skipping ceiling", file=sys.stderr)
+        return
+    best_dps, best_label = 0.0, ""
+    for label, gear in variants:
+        bis_input = build_bis_profile(profile, gear, talents, use_route, cfg.simc)
+        bis_dir = work_dir / "bis" / label.lower()
+        raw = run_simc(bis_input, bis_dir, f"{profile.name.lower()}_{slug}_bis_{label.lower()}", cfg.simc)
+        r = parse_simc_result(raw, profile.name, dungeon)
+        if r and r.dps > best_dps:
+            best_dps, best_label = r.dps, label
+    if best_dps:
+        result.bis_dps = best_dps
+        result.bis_variant = best_label
+        upside = round(100 * (best_dps / result.dps - 1)) if result.dps else 0
+        print(f"  simc: {profile.name} BiS ceiling {best_dps/1000:.0f}k ({best_label}) "
+              f"= +{upside}% over actual gear", file=sys.stderr)
 
 
 
@@ -785,6 +951,49 @@ def _p10(vals: list[float]) -> float:
     return statistics.quantiles(vals, n=10, method="inclusive")[0] if len(vals) >= 2 else vals[0]
 
 
+def _ilvl_field_rows(client, enc: int, cls: str, spec: str, key_level: int,
+                     pages: int, timer_ms: int,
+                     cache: dict | None = None) -> list[tuple[float, int]]:
+    """In-time (dps, ilvl) field rows for an encounter/spec/key — for the ilvl-capped field.
+
+    Like `_intime_sorted` but keeps each row's joined item level (rows without one are
+    dropped), and fetches fewer pages since the per-row playerDetails join costs one query
+    per ranked report. Memoised in `cache` under a distinct key from the dps-only field."""
+    ck = (enc, cls, spec, "ilvlrows", key_level, pages)
+    if cache is not None and ck in cache:
+        return cache[ck]
+    rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level,
+                                        pages=pages, metric="dps", with_ilvl=True)
+    rows = [(r["dps"], int(r["ilvl"])) for r in rk
+            if r.get("dps") and r.get("ilvl")
+            and (timer_ms <= 0 or (r.get("duration_ms") or 0) <= timer_ms)]
+    if cache is not None:
+        cache[ck] = rows
+    return rows
+
+
+def _capped_field_block(client, enc: int, cls: str, spec: str, key_level: int,
+                        baseline_ilvl: int, knobs: SimcKnobs, timer_ms: int,
+                        cache: dict | None = None) -> dict | None:
+    """Gear-fair peer field: percentiles over ranked players within `ilvl_cap_delta` ilvls
+    of the roster char's `baseline_ilvl`. Returns a block with the capped p10/p50/p90 and
+    sample size, or — when too few peers fall in range — a `fallback` marker (the renderer
+    then shows the full field instead). None if no ilvl-joined rows at all."""
+    rows = _ilvl_field_rows(client, enc, cls, spec, key_level, knobs.ilvl_cap_pages, timer_ms, cache)
+    if not rows:
+        return None
+    cap = baseline_ilvl + knobs.ilvl_cap_delta
+    capped = sorted((dps for dps, ilvl in rows if ilvl <= cap), reverse=True)
+    block = {"baseline_ilvl": baseline_ilvl, "cap_ilvl": cap, "n": len(capped),
+             "field_n": len(rows)}
+    if len(capped) < max(1, knobs.ilvl_cap_min_n):
+        block["fallback"] = True
+        return block
+    block.update(p10=round(_p10(capped)), median=round(statistics.median(capped)),
+                 p90=round(_p90(capped)), best=round(capped[0]))
+    return block
+
+
 def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int = 3) -> None:
     """Add real-player DPS at the given key level to each simmed player, so the dashboard
     can show how far the SimC ceiling is from real play. Mutates summary in place (player
@@ -826,13 +1035,20 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
                                     else "below_field" if pctile <= 10 else "plausible")
 
 
-def field_benchmarks_by_key(client, runs: list[dict], pages: int = 3) -> dict[str, dict]:
+def field_benchmarks_by_key(client, runs: list[dict], pages: int = 3,
+                            knobs: SimcKnobs | None = None,
+                            baseline_ilvls: dict[str, int] | None = None) -> dict[str, dict]:
     """Field DPS (p10/p50/p90) and HPS (p50) per roster player, indexed by dungeon AND the
     run's KEY LEVEL — because DPS scales with key level (more enemy HP), so a +9 run must be
     measured against the +9 field, not a fixed +12. Only the (dungeon, key) pairs we actually
     ran are fetched, timed runs only. Returns {dungeon: {str(key): {player: bench}}}; the run
     debrief picks bench by the selected run's own key. The +12-attached sim benchmarks stay
-    for the sim-vs-field realism flag (sim is modelled at +12)."""
+    for the sim-vs-field realism flag (sim is modelled at +12).
+
+    When `knobs.ilvl_cap_enabled` and a roster char's `baseline_ilvls[name]` is known, each
+    DPS bench also gets an `ilvl_capped` block — the gear-fair peer field (ranked players
+    within `ilvl_cap_delta` ilvls of that char), with a min-n fallback marker."""
+    cap_on = bool(knobs and knobs.ilvl_cap_enabled and baseline_ilvls)
     roster: dict[str, tuple[str, str, str]] = {}
     for r in runs:
         for p in r.get("party", []):
@@ -856,6 +1072,11 @@ def field_benchmarks_by_key(client, runs: list[dict], pages: int = 3) -> dict[st
                 if dps:
                     bench.update(top12_p10=round(_p10(dps)), top12_median=round(statistics.median(dps)),
                                  top12_typical=round(_p90(dps)), top12_best=round(dps[0]), top12_n=len(dps))
+                    if cap_on and role not in ("healer",) and baseline_ilvls.get(name):
+                        capped = _capped_field_block(client, enc, cls, spec, key,
+                                                     baseline_ilvls[name], knobs, timer_ms, cache)
+                        if capped:
+                            bench["ilvl_capped"] = capped
                 if role in ("healer", "tank"):
                     hps = _intime_sorted(client, enc, cls, spec, "hps", key, pages, timer_ms, cache)
                     if hps:

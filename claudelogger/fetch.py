@@ -392,6 +392,29 @@ def get_roles(client: WCLClient, code: str, fight_id: int) -> dict[int, tuple[st
     return roles
 
 
+def fetch_player_ilvls(client: WCLClient, code: str, fight_id: int) -> dict[str, int]:
+    """Return {player_name: equipped item level} for a report's fight.
+
+    The `characterRankings` scalar carries no item level, but each ranked row points at a
+    `report`/`fightID`, and `playerDetails` (same query `get_roles` uses, so the cache is
+    shared) exposes `maxItemLevel` per player — exactly the number the WCL web UI shows.
+    One query per report; everything caches, so a field-wide ilvl join is a one-time cost.
+    Returns {} if the fight has no player details (older/partial logs)."""
+    try:
+        res = client.query(_ROLES_Q, {"code": code, "fight": fight_id})
+        pd = res["data"]["reportData"]["report"]["playerDetails"]["data"]["playerDetails"]
+    except (KeyError, TypeError):
+        return {}
+    out: dict[str, int] = {}
+    for key in ("tanks", "healers", "dps"):
+        for p in pd.get(key, []) or []:
+            name = p.get("name")
+            ilvl = p.get("maxItemLevel") or p.get("minItemLevel")
+            if name and ilvl:
+                out[name] = int(ilvl)
+    return out
+
+
 # CombatantInfo events contain per-player gear, talents, stats, specID at the
 # start of the encounter. One event per player, keyed by sourceID.
 _COMBATANT_INFO_Q = """
@@ -477,14 +500,19 @@ query ($e: Int!, $cls: String!, $spec: String!, $bracket: Int!, $page: Int!) {
 
 def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: str,
                              spec_name: str, *, key_level: int = 12, pages: int = 1,
-                             metric: str = "dps") -> list[dict[str, Any]]:
+                             metric: str = "dps", with_ilvl: bool = False) -> list[dict[str, Any]]:
     """Top rankings for a class/spec on an encounter at a fixed key level, by `metric`
     (``dps`` or ``hps`` — the field name is the per-row amount either way).
 
     WCL's `bracket` is keystone level minus 1 (bracket 11 == +12). Returns
     [{name, dps, key, guild, duration_ms}] sorted highest-first across the requested
     pages (the `dps` key carries the requested metric's amount; `duration_ms` is the run
-    length, so callers can keep only timed runs)."""
+    length, so callers can keep only timed runs).
+
+    With ``with_ilvl=True`` each row also gets an ``ilvl`` (its equipped item level),
+    joined from `playerDetails` of the row's own report — one extra query per *distinct*
+    report (cached), letting callers cap the field to peers near the roster's gear level.
+    Rows whose report has no player details get ``ilvl=None``."""
     metric = "hps" if metric == "hps" else "dps"   # whitelist — value goes into the query
     query = _CHAR_RANKINGS_Q % metric
     out: list[dict[str, Any]] = []
@@ -497,12 +525,35 @@ def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: s
         cr = (((res.get("data") or {}).get("worldData") or {}).get("encounter") or {}).get("characterRankings")
         rankings = cr.get("rankings", []) if isinstance(cr, dict) else []
         for r in rankings:
+            rep = r.get("report") or {}
             out.append({"name": r.get("name"), "dps": r.get("amount", 0.0),
                         "key": r.get("bracketData"), "guild": (r.get("guild") or {}).get("name"),
-                        "duration_ms": r.get("duration", 0)})
+                        "duration_ms": r.get("duration", 0),
+                        "report_code": rep.get("code"), "report_fight": rep.get("fightID")})
         if not (isinstance(cr, dict) and cr.get("hasMorePages")):
             break
+    if with_ilvl:
+        _attach_ranking_ilvls(client, out)
     return out
+
+
+def _attach_ranking_ilvls(client: WCLClient, rows: list[dict[str, Any]]) -> None:
+    """Set each ranking row's ``ilvl`` from its report's playerDetails, in place.
+
+    Groups rows by (report_code, fightID) so each report is fetched once (and cached),
+    then matches the ranked player by name within that report's details."""
+    by_report: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for r in rows:
+        code, fid = r.get("report_code"), r.get("report_fight")
+        r["ilvl"] = None
+        if code and fid is not None:
+            by_report.setdefault((code, int(fid)), []).append(r)
+    for (code, fid), group in by_report.items():
+        ilvls = fetch_player_ilvls(client, code, fid)
+        if not ilvls:
+            continue
+        for r in group:
+            r["ilvl"] = ilvls.get(r.get("name"))
 
 
 def fetch_fight_rankings(client: WCLClient, encounter_id: int, difficulty: int = 10) -> list[dict[str, Any]]:

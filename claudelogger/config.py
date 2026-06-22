@@ -248,6 +248,32 @@ class SimcKnobs:
     augmentation: str = "void_touched_augment_rune"
     weapon_oil: str = "thalassian_phoenix_oil"   # applied as temporary_enchant on weapons
 
+    # --- BiS-ceiling sims (Feature A) ---
+    # Re-sim each player on their own route with SimC's reference (BiS) gear swapped in,
+    # keeping their talents/spec, to show the pure gear *ceiling*. Gear comes from the
+    # bundled SimC reference profiles (MID1) — the machine-readable embodiment of the same
+    # theorycraft the guide sites publish; for specs with multiple variant profiles we sim
+    # each variant's gear and keep the best. reference_profiles_dir is auto-derived from the
+    # binary path when left blank (sibling `profiles/MID1`).
+    bis_enabled: bool = True
+    reference_profiles_dir: str = ""          # blank => derive from simc_binary (../profiles/MID1)
+    bis_iterations: int = 3000                 # lighter than the headline sim — it's a ceiling estimate
+
+    # --- ilvl-capped peer field (Feature B) ---
+    # The WCL ranking field is better-geared than our roster. Capping it to ranked players
+    # within `ilvl_cap_delta` item levels of the roster char gives a gear-fair *peer* lens
+    # (play, not gear). ilvl is joined per-report from playerDetails (one query/report), so
+    # we bound it to the first `ilvl_cap_pages` pages. Falls back to the full field when the
+    # capped sample is below `ilvl_cap_min_n`.
+    ilvl_cap_enabled: bool = True
+    # Keep field rows within +N ilvl of the roster char. NB the ranked field that logs these
+    # keys out-gears our roster by ~10+ ilvls (verified: our ~278 vs a 280–292 +10 field), so a
+    # tight +1 cap is empty — +10 picks the lowest-geared, closest-to-us cohort that still has a
+    # usable sample. The caption shows the actual delta so the gear gap stays explicit.
+    ilvl_cap_delta: int = 10
+    ilvl_cap_pages: int = 2                     # rankings pages to ilvl-join (~100 rows/page)
+    ilvl_cap_min_n: int = 15                    # below this many capped rows, fall back to full field
+
 
 @dataclass
 class Config:
@@ -282,6 +308,14 @@ class Config:
             cfg.simc.default_iterations = int(it)
         if th := env.get("CLAUDELOGGER_SIMC_THREADS"):
             cfg.simc.threads = int(th)
+        if (bis := env.get("CLAUDELOGGER_SIMC_BIS")) is not None and bis != "":
+            cfg.simc.bis_enabled = bis not in ("0", "false", "False", "no")
+        if bi := env.get("CLAUDELOGGER_SIMC_BIS_ITERATIONS"):
+            cfg.simc.bis_iterations = int(bi)
+        if rpd := env.get("CLAUDELOGGER_SIMC_REFERENCE_PROFILES"):
+            cfg.simc.reference_profiles_dir = rpd
+        if (icap := env.get("CLAUDELOGGER_ILVL_CAP")) is not None and icap != "":
+            cfg.simc.ilvl_cap_enabled = icap not in ("0", "false", "False", "no")
         cfg.cache_dir.mkdir(exist_ok=True)
         cfg.out_dir.mkdir(exist_ok=True)
         return cfg

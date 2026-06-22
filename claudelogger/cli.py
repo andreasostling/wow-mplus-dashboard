@@ -494,8 +494,17 @@ def cmd_simc(args) -> int:
         if analysis_path.exists():
             try:
                 runs_for_bench = json.loads(analysis_path.read_text(encoding="utf-8")).get("runs", [])
+                # Roster char ilvls (from this fight's playerDetails) feed the gear-fair
+                # ilvl-capped peer field — comparing our play to peers near our gear, not the
+                # better-geared full field.
+                baseline_ilvls = fetch.fetch_player_ilvls(client, report_code, fight.id)
+                if baseline_ilvls and cfg.simc.ilvl_cap_enabled:
+                    print(f"  ilvl-capped field on (roster ilvls: "
+                          f"{', '.join(f'{n} {iv}' for n, iv in sorted(baseline_ilvls.items()))})",
+                          file=sys.stderr)
                 print("  fetching per-key field benchmarks (each run vs its own key level)…", file=sys.stderr)
-                field_by_key = simc.field_benchmarks_by_key(client, runs_for_bench)
+                field_by_key = simc.field_benchmarks_by_key(
+                    client, runs_for_bench, knobs=cfg.simc, baseline_ilvls=baseline_ilvls)
                 field_pace = simc.field_pace_by_key(client, runs_for_bench)
             except (json.JSONDecodeError, OSError):
                 pass

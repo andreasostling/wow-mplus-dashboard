@@ -70,6 +70,10 @@ Outputs land in `out/`:
 - `analysis.json` — the full structured result (source of truth, diff-able).
 - `dashboard.html` — self-contained, open it straight in a browser. Sortable, filter
   by dungeon / player / cause, with a **per-dungeon pre-run briefing** (dungeon picker).
+  When SimC data is present, the run-debrief DPS bars add two **gear-fair** references:
+  your **BiS ceiling** (your play + reference top gear on the same route → pure gear upside)
+  and the **ilvl-capped peer field** (ranked players near *your* item level, not the
+  better-geared full field) — see the `simc` command.
 - `briefings/<Dungeon>.md` — one markdown cheat-sheet per dungeon: dangerous abilities +
   what to do, kick priority, who dies there, and **route stop-targets** (kicks + stuns/CC).
 

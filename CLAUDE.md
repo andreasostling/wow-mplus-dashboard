@@ -92,7 +92,7 @@ cli simc → fetch (combatantInfo → gear/talents)
 | `danger.py` | "Very dangerous cast" detection from the DamageTaken stream (NPC casts aren't logged): worst AoE pulse vs party HP + worst single-player burst in a bounded window vs that player's HP. Feeds the briefing's "Most dangerous casts" list + per-death tagging. Thresholds in `Knobs.danger_*`. `analyze_public` reuses the same metric on public WCL fightRankings logs (reconstructing party HP from overkill) to estimate un-logged dungeons — opt-in via `--public-danger N`, median-aggregated, labelled with the key levels. |
 | `guides.py` | Scrapes Method.gg's per-dungeon Ability Tracker (server-rendered HTML, no API) into `{mob, ability, spell_id, tags, note}` — qualitative interrupt/tank-buster/avoid/frontal/etc. flags + Wowhead links. Cached under `cache/guides/`. Fills the "what to watch for" gap for un-logged dungeons without log variance. |
 | `report.py` | `build_season`, `build_dungeon_briefings`, `_stun_verdict`, JSON + HTML (`_HTML` template) + markdown briefings. |
-| `simc.py` | WCL combatantInfo → simc profiles, route loading/parsing, simc binary invocation, result parsing, group buff injection. `attach_dps_benchmarks` adds real-player DPS at the key level (WCL `characterRankings`, `bracket = key−1`; field 90th percentile = "typical" strong logger, used as the % denominator in the run-debrief DPS bars) to each simmed player, plus a `sim_realism` flag = where the sim DPS lands in that (better-geared) real field: ≥p90 ⇒ "optimistic" (sim runs hot), ≤p10 ⇒ below-field (gear-explained). Surfaced in the SimC table + run-debrief. Rankings carry no item level and ilvl⇆skill are confounded, so we don't gear-normalize — the SimC ceiling (your own gear) is the gear-fair target; the field is real-player context. |
+| `simc.py` | WCL combatantInfo → simc profiles, route loading/parsing, simc binary invocation, result parsing, group buff injection. `attach_dps_benchmarks` adds real-player DPS at the key level (WCL `characterRankings`, `bracket = key−1`; field 90th percentile = "typical" strong logger, used as the % denominator in the run-debrief DPS bars) to each simmed player, plus a `sim_realism` flag = where the sim DPS lands in that (better-geared) real field: ≥p90 ⇒ "optimistic" (sim runs hot), ≤p10 ⇒ below-field (gear-explained). Surfaced in the SimC table + run-debrief. **Two gear-fair lenses sit on top of this** (the field out-gears our roster by ~10+ ilvls, so the raw field isn't gear-fair): **(A) BiS-ceiling sim** — `bis_gear_variants`/`build_bis_profile`/`_attach_bis_ceiling` re-sim each player on their *own* route+talents with reference (BiS) gear lifted from the bundled `profiles/MID1/MID1_<Class>_<Spec>*.simc` (best of the spec's variants kept), giving `bis_dps`/`bis_variant`/`bis_upside_pct` = pure gear upside; **(B) ilvl-capped peer field** — `fetch.fetch_player_ilvls` joins each ranking row's equipped ilvl from `playerDetails` (one query/report, cached), and `_capped_field_block` restricts the field to ranked players within `ilvl_cap_delta` ilvls of the roster char (default **+10**, because a tight +1 is empty — verified our ~278 vs a 280–292 field), with a min-n fallback to the full field. Both are knob-gated (`SimcKnobs.bis_*`, `ilvl_cap_*`) and surfaced in the run-debrief DPS bars (purple BiS marker, teal peer marker) + SimC table. The SimC ceiling stays the headline gear-fair target. |
 | `route_analysis.py` | Bloodlust optimization (greedy placement, exhaustion tracking), CD alignment, timer math, pull imbalance, travel waste, mana pressure, AoE breakpoints, ranged pull compensation (Keg Smash range). |
 
 ## External-data gotchas (hard-won — keep these in mind)
@@ -175,7 +175,17 @@ cli simc → fetch (combatantInfo → gear/talents)
   (roster + per-char region/realm in `config.ARMORY_CHARACTERS`). SimC processes lines
   top-to-bottom, so overrides replace WCL-extracted values.
 - **SimC tunables** → env vars: `CLAUDELOGGER_SIMC_BINARY`, `CLAUDELOGGER_SIMC_KEY_LEVEL`,
-  `CLAUDELOGGER_SIMC_ITERATIONS`, `CLAUDELOGGER_SIMC_THREADS`.
+  `CLAUDELOGGER_SIMC_ITERATIONS`, `CLAUDELOGGER_SIMC_THREADS`, `CLAUDELOGGER_SIMC_BIS` (0 to skip
+  BiS-ceiling sims), `CLAUDELOGGER_SIMC_BIS_ITERATIONS`, `CLAUDELOGGER_SIMC_REFERENCE_PROFILES`
+  (override the MID1 dir; default = binary's sibling `profiles/MID1`), `CLAUDELOGGER_ILVL_CAP`
+  (0 to skip the ilvl-capped peer field).
+- **BiS-ceiling sims & ilvl-capped field gotchas:** the ilvl-cap join fetches one `playerDetails`
+  per *distinct ranked report* — cheap singly, but ~50 min cold over a full season (every
+  dungeon×key×spec), then fully cached. The BiS gear comes from SimC's own MID1 reference
+  profiles (Icy Veins/Wowhead expose only item *names*, not simmable item/bonus/gem ids — and
+  the MID1 set already *is* the same theorycrafted BiS, fully itemized). Reference profiles use
+  the **plural** `shoulders`/`wrists` slot tokens; WCL-extracted gear uses the singular — both
+  are valid simc, `_BIS_GEAR_SLOTS` accepts either.
 
 ## Context
 
