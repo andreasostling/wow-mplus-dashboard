@@ -782,7 +782,7 @@ _HTML = r"""<!doctype html>
   .pull-bar .track{background:var(--card);border:1px solid var(--line);border-radius:5px;height:14px;overflow:hidden;position:relative}
   .pull-bar .fill{display:block;height:100%;min-width:2px}
   .fill-trash{background:var(--accent)} .fill-boss{background:var(--bad)}
-  .gapbar{display:grid;grid-template-columns:150px 1fr 175px;gap:8px;align-items:center;margin:3px 0}
+  .gapbar{display:grid;grid-template-columns:140px 1fr 230px;gap:8px;align-items:center;margin:3px 0}
   .gapbar .track{position:relative;background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
   .gapbar .ceil{position:absolute;inset:0;background:#1d2530}
   .gapbar .act{position:absolute;left:0;top:0;bottom:0;background:var(--accent);min-width:2px;display:flex;align-items:center;justify-content:flex-end}
@@ -1341,12 +1341,15 @@ render();
       (ds.players||[]).forEach(p=>{ simLookup[k][p.player] = p; });
     }
   }
-  // The healer isn't simmed (no ceiling) but still gets the +kl field DPS benchmark, so
-  // their bar shows the p90 marker like everyone else. Merge it in under the same lookup.
-  if(SIMC && SIMC.healer_benchmarks){
-    for(const [dn, b] of Object.entries(SIMC.healer_benchmarks)){
+  // Field benchmarks for roster members the sim path doesn't cover: the un-simmed healer
+  // (DPS + HPS) and the tank's healing (HPS). Merge (augment) so the simmed tank keeps its
+  // DPS ceiling while gaining hps_typical; the healer's entry is created fresh.
+  if(SIMC && SIMC.field_benchmarks){
+    for(const [dn, players] of Object.entries(SIMC.field_benchmarks)){
       const k = dnorm(dn); simLookup[k] = simLookup[k] || {};
-      if(b && b.player) simLookup[k][b.player] = b;
+      for(const [pn, b] of Object.entries(players||{})){
+        simLookup[k][pn] = Object.assign(simLookup[k][pn]||{}, b);
+      }
     }
   }
   const debriefRuns = RUNS.map((r,i)=>({r,i})).filter(x=>x.r.timing && Object.keys(x.r.timing).length);
@@ -1386,6 +1389,15 @@ render();
     // B: DPS — ONE combined view per player. The bar is actual run-DPS; the orange
     //    marker is the typical (p90) +kl logger and the faint region is your SimC ceiling,
     //    with both gap %s on the right. (Replaces the old three near-identical blocks.)
+    // % vs a benchmark, coloured on a continuous red→amber→green gradient (0%→120%+),
+    // not bucketed. Hue 0 (red) at 0% up to 120 (green) at 100%+; used for every delta.
+    const pctColor = p => `hsl(${Math.max(0,Math.min(120,(p||0)*1.2))},68%,58%)`;
+    const pctSpan = (p,tip) => `<span style="color:${pctColor(p)}"${tip?` title="${tip}"`:''}>${p}%`;
+    // A small legend bar showing the colour scale, appended under a throughput segment.
+    const gradLegend = () => el(`<div class="contrib" style="margin-top:4px;display:flex;align-items:center;gap:8px">`
+      +`<span>0%</span><span style="flex:0 0 160px;height:8px;border-radius:4px;`
+      +`background:linear-gradient(to right,${pctColor(0)},${pctColor(50)},${pctColor(83)},${pctColor(100)})"></span>`
+      +`<span>100%+</span><span class="muted">= our throughput as a % of the field benchmark (red low → green at/above it)</span></div>`);
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
@@ -1393,7 +1405,6 @@ render();
       const roleTag = n => dps[n].role==='tank'?' 🛡️':dps[n].role==='healer'?' 💚':'';
       const kl = (sims[ordered[0]]||{}).top12_key||12;
       const actTitle = a => `actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS`;
-      const pctClass = p => p<70?'low':p<90?'lever':'ok-use';
       if(!haveSim){
         box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS</h3>'));
         box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+'+kl+' benchmark, and the gap%.</div>'));
@@ -1409,17 +1420,22 @@ render();
         let mx=1; ordTyp.forEach(n=>{ const s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, s.top12_typical||0, s.dps||0); });
         let anyHot=false;
         ordTyp.forEach(n=>{
-          const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, ceil=s.dps||0;
-          const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
+          const a=dps[n], s=sims[n]||{}, top=s.top12_typical||0, med=s.top12_median||0, ceil=s.dps||0;
+          const actW=Math.round(100*a.run_dps/mx), topW=top>0?Math.round(100*top/mx):0,
+                medW=med>0?Math.round(100*med/mx):0, ceilW=ceil>0?Math.round(100*ceil/mx):0;
+          const pctMed=med>0?Math.round(100*a.run_dps/med):null;
           const pctT=top>0?Math.round(100*a.run_dps/top):null;
           const pctC=ceil>0?Math.round(100*a.run_dps/ceil):null;
           const hot = s.sim_realism==='optimistic'; if(hot) anyHot=true;
           const hotMark = hot?` <span class="low" title="sim DPS is at the ${s.sim_pctile}th percentile of real +${kl} ${esc(n)} logs (a better-geared field) — ceiling likely optimistic">⚠</span>`:'';
           const ceilRegion = ceil>0?`<span class="ceil" style="width:${ceilW}%"></span>`:'';
-          const topMark = top>0?`<span title="typical (90th-percentile) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
+          // Two field markers: p50 (grey, median) and p90 (orange, strong logger).
+          const medMark = med>0?`<span title="median (p50) +${kl} ${esc(n)} log: ${Math.round(med).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--mut);left:calc(${medW}% - 1px)"></span>`:'';
+          const topMark = top>0?`<span title="typical (p90) +${kl} ${esc(n)} log: ${Math.round(top).toLocaleString()} DPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${topW}% - 1px)"></span>`:'';
           const bits=[];
-          if(pctT!==null) bits.push(`<span class="${pctClass(pctT)}" title="vs the p90 (typical) +${kl} WCL logger">${pctT}% p90 WCL</span>`);
-          if(pctC!==null) bits.push(`<span class="${pctClass(pctC)}" title="vs your SimC ceiling">${pctC}% sim</span>`);
+          if(pctMed!==null) bits.push(pctSpan(pctMed, `vs the p50 (median) +${kl} WCL logger`)+' p50</span>');
+          if(pctT!==null) bits.push(pctSpan(pctT, `vs the p90 (typical) +${kl} WCL logger`)+' p90 WCL</span>');
+          if(pctC!==null) bits.push(pctSpan(pctC, 'vs your SimC ceiling')+' sim</span>');
           // DPS number always rides the bar: inside the blue bar (dark, right-aligned)
           // when there's room, else just past its tip in the track (light). The meta
           // column keeps only the % deltas, so it never overflows.
@@ -1429,19 +1445,20 @@ render();
           const tipLabel = inside?'':`<span class="lbl-out" style="left:${actW}%">${dpsStr}</span>`;
           const meta = `${bits.join(' · ')}${hotMark}`;
           box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
-            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${topMark}${tipLabel}</span>
+            <span class="track">${ceilRegion}<span class="act" style="width:${actW}%" title="${actTitle(a)}${ceil?(' · ceiling '+Math.round(ceil).toLocaleString()):''}">${actLabel}</span>${medMark}${topMark}${tipLabel}</span>
             <span class="muted meta">${meta}</span></div>`));
         });
-        let cap = '<span style="color:#e0a040">▎</span> = typical +'+kl+' logger (p90 WCL run-DPS, real-player context) · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear (gear-fair target).';
+        let cap = '<span style="color:var(--mut)">▎</span> = median (p50) · <span style="color:#e0a040">▎</span> = typical (p90) +'+kl+' WCL logger · <span style="background:#1d2530;border:1px solid var(--line);display:inline-block;width:11px;height:11px;vertical-align:middle;border-radius:2px"></span> = your SimC ceiling at this gear (gear-fair target).';
         if(anyHot) cap += ` <span class="low">⚠</span> = ceiling sits above the real +${kl} field (the sim runs hot for that spec); read that gap as sim/gear, not execution.`;
-        cap += ' <span class="muted">WCL = Warcraft Logs.</span>';
+        cap += ' <span class="muted">Field = timed +'+kl+' runs only. WCL = Warcraft Logs.</span>';
         box.append(el('<div class="contrib">'+cap+'</div>'));
+        box.append(gradLegend());
       }
     }
 
     // B2: HPS — healing throughput, its own segment below DPS. Everyone's healing shows
-    //     (green bars); only the healer carries a field benchmark — the p50 (median) +kl
-    //     HPS for their spec, since healing is comp/route-driven and the median is the
+    //     (green bars); the healer AND the tank carry a field benchmark — the p50 (median)
+    //     +kl HPS for their spec, since healing is comp/route-driven and the median is the
     //     fair "typical", not the top decile. Mirrors the DPS bars otherwise.
     const hps = t.hps_actual||{}; const hnames = Object.keys(hps);
     if(hnames.length){
@@ -1449,25 +1466,25 @@ render();
       const hkl = (Object.values(hsims).find(s=>s&&s.top12_key)||{}).top12_key||12;
       const hord = hnames.slice().sort((a,b)=>hps[b].run_hps-hps[a].run_hps);
       const hRoleTag = n => hps[n].role==='tank'?' 🛡️':hps[n].role==='healer'?' 💚':'';
-      const pctClassH = p => p<70?'low':p<90?'lever':'ok-use';
-      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">💚 HPS — healing vs the typical (p50) +${hkl} healer</h3>`));
+      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">💚 HPS — healing vs the median (p50) +${hkl} healer/tank</h3>`));
       let mxH=1; hord.forEach(n=>{ const s=hsims[n]||{}; mxH=Math.max(mxH, hps[n].run_hps, s.hps_typical||0); });
       let anyBench=false;
       hord.forEach(n=>{
         const h=hps[n], s=hsims[n]||{}, typ=s.hps_typical||0;
         const actW=Math.round(100*h.run_hps/mxH), typW=typ>0?Math.round(100*typ/mxH):0;
         const pctT=typ>0?Math.round(100*h.run_hps/typ):null; if(typ>0) anyBench=true;
-        const topMark = typ>0?`<span title="median (p50) +${hkl} ${esc(n)} healer: ${Math.round(typ).toLocaleString()} HPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${typW}% - 1px)"></span>`:'';
+        const typMark = typ>0?`<span title="median (p50) +${hkl} ${esc(n)} ${s.role==='tank'?'tank':'healer'}: ${Math.round(typ).toLocaleString()} HPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--mut);left:calc(${typW}% - 1px)"></span>`:'';
         const hpsStr = `${Math.round(h.run_hps/1000)}k`;
         const inside = actW>=15;
         const actLabel = inside?`<span class="lbl">${hpsStr}</span>`:'';
         const tipLabel = inside?'':`<span class="lbl-out" style="left:${actW}%">${hpsStr}</span>`;
-        const meta = pctT!==null?`<span class="${pctClassH(pctT)}" title="vs the p50 (median) +${hkl} WCL healer">${pctT}% p50 WCL</span>`:'';
+        const meta = pctT!==null?pctSpan(pctT, `vs the p50 (median) +${hkl} WCL field`)+' p50 WCL</span>':'';
         box.append(el(`<div class="gapbar"><span>${esc(n)}${hRoleTag(n)}</span>
-          <span class="track"><span class="act act-heal" style="width:${actW}%" title="${Math.round(h.run_hps).toLocaleString()} run-HPS · ${Math.round(h.active_hps).toLocaleString()} active-HPS">${actLabel}</span>${topMark}${tipLabel}</span>
+          <span class="track"><span class="act act-heal" style="width:${actW}%" title="${Math.round(h.run_hps).toLocaleString()} run-HPS · ${Math.round(h.active_hps).toLocaleString()} active-HPS">${actLabel}</span>${typMark}${tipLabel}</span>
           <span class="muted meta">${meta}</span></div>`));
       });
-      if(anyBench) box.append(el(`<div class="contrib"><span style="color:#e0a040">▎</span> = typical +${hkl} healer (p50 / median WCL HPS for that spec). Only the healer is benchmarked — everyone else&#39;s healing is incidental. WCL = Warcraft Logs.</div>`));
+      if(anyBench)
+        box.append(el(`<div class="contrib"><span style="color:var(--mut)">▎</span> = median (p50) +${hkl} HPS for that spec (timed runs). Healer &amp; tank are benchmarked; other players&#39; healing is incidental (no marker). Number colour uses the same red→green scale as above. WCL = Warcraft Logs.</div>`));
     }
 
     // C: cooldown economy

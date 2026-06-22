@@ -482,8 +482,9 @@ def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: s
     (``dps`` or ``hps`` — the field name is the per-row amount either way).
 
     WCL's `bracket` is keystone level minus 1 (bracket 11 == +12). Returns
-    [{name, dps, key, guild}] sorted highest-first across the requested pages (the
-    `dps` key carries the requested metric's amount)."""
+    [{name, dps, key, guild, duration_ms}] sorted highest-first across the requested
+    pages (the `dps` key carries the requested metric's amount; `duration_ms` is the run
+    length, so callers can keep only timed runs)."""
     metric = "hps" if metric == "hps" else "dps"   # whitelist — value goes into the query
     query = _CHAR_RANKINGS_Q % metric
     out: list[dict[str, Any]] = []
@@ -497,7 +498,8 @@ def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: s
         rankings = cr.get("rankings", []) if isinstance(cr, dict) else []
         for r in rankings:
             out.append({"name": r.get("name"), "dps": r.get("amount", 0.0),
-                        "key": r.get("bracketData"), "guild": (r.get("guild") or {}).get("name")})
+                        "key": r.get("bracketData"), "guild": (r.get("guild") or {}).get("name"),
+                        "duration_ms": r.get("duration", 0)})
         if not (isinstance(cr, dict) and cr.get("hasMorePages")):
             break
     return out

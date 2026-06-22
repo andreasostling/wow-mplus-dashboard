@@ -17,6 +17,7 @@ from typing import Any
 
 from . import fetch
 from .config import Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, SimcKnobs
+from .run_analysis import _timer_for
 
 # WCL specID → (simc_class, simc_spec, role).
 # https://wowpedia.fandom.com/wiki/SpecializationID
@@ -755,24 +756,48 @@ def build_simc_summary(results: list[SimcResult]) -> dict:
     }
 
 
+def _intime_sorted(client, enc: int, cls: str, spec: str, metric: str,
+                   key_level: int, pages: int, timer_ms: int,
+                   cache: dict | None = None) -> list[float]:
+    """Field amounts (dps or hps) for in-time runs only, sorted high→low.
+
+    The benchmark should be "what timed-key players do", so drop runs whose duration
+    exceeds the dungeon timer (depleted/over-time keys) — they'd drag the field down and
+    aren't the comparison we want. timer_ms<=0 means we don't know the timer → keep all."""
+    ck = (enc, cls, spec, metric)
+    if cache is not None and ck in cache:
+        return cache[ck]
+    rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level,
+                                        pages=pages, metric=metric)
+    vals = sorted((r["dps"] for r in rk
+                   if r.get("dps") and (timer_ms <= 0 or (r.get("duration_ms") or 0) <= timer_ms)),
+                  reverse=True)
+    if cache is not None:
+        cache[ck] = vals
+    return vals
+
+
+def _p90(vals: list[float]) -> float:
+    return statistics.quantiles(vals, n=10, method="inclusive")[8] if len(vals) >= 2 else vals[0]
+
+
 def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int = 3) -> None:
     """Add real-player DPS at the given key level to each simmed player, so the dashboard
     can show how far the SimC ceiling is from real play. Mutates summary in place (player
     dicts are shared with by_player). Pulls WCL characterRankings per (dungeon, class,
-    spec); healers are skipped (DPS isn't theirs).
+    spec); healers are skipped (DPS isn't theirs). Only TIMED runs count (see _intime_sorted).
 
-    Rankings carry no item level. The headline number `top12_typical` is the 90th
-    PERCENTILE of the field across several pages — a strong (top-10%) +12 logger, the
-    target we measure our run-DPS against. It's below the #1 parse (`top12_best`) but
-    well above the field median, so it reads as "what good looks like" without chasing
-    the single over-geared elite. The SimC ceiling itself is already gear-correct (it
-    sims the player's own items), so it stays the gear-fair personal target; these are
-    real-player context."""
+    Rankings carry no item level. `top12_typical` is the field 90th PERCENTILE (a strong,
+    top-10% logger — "what good looks like") and `top12_median` the p50 (the middle of the
+    timed field); we show our run-DPS against both. `top12_best` is the #1 parse. The SimC
+    ceiling itself is already gear-correct, so it stays the gear-fair personal target;
+    these are real-player context."""
     cache: dict[tuple, list[float]] = {}
     for dungeon, ds in (summary.get("by_dungeon") or {}).items():
         enc = MPLUS_ENCOUNTERS.get(dungeon)
         if not enc:
             continue
+        timer_ms = (_timer_for(dungeon) or 0) * 1000
         for p in ds.get("players", []):
             if p.get("role") == "heal":
                 continue
@@ -780,20 +805,13 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
             if len(toks) < 2:
                 continue
             cls_name, spec_name = toks[-1], " ".join(toks[:-1])
-            ck = (enc, cls_name, spec_name)
-            if ck not in cache:
-                rk = fetch.fetch_character_rankings(client, enc, cls_name, spec_name,
-                                                    key_level=key_level, pages=pages)
-                cache[ck] = sorted((r["dps"] for r in rk if r.get("dps")), reverse=True)
-            dps = cache[ck]
+            dps = _intime_sorted(client, enc, cls_name, spec_name, "dps", key_level, pages, timer_ms, cache)
             if dps:
                 sim = p.get("dps", 0)
                 pctile = round(100 * sum(1 for x in dps if x < sim) / len(dps))
                 p["top12_best"] = round(dps[0])
-                # 90th percentile of the field = "typical strong logger" target.
-                p90 = (statistics.quantiles(dps, n=10, method="inclusive")[8]
-                       if len(dps) >= 2 else dps[0])
-                p["top12_typical"] = round(p90)
+                p["top12_typical"] = round(_p90(dps))     # field p90 ("strong logger")
+                p["top12_median"] = round(statistics.median(dps))  # field p50 (middle of the timed field)
                 p["top12_n"] = len(dps)
                 p["top12_key"] = key_level
                 p["sim_pctile"] = pctile  # where the sim DPS sits within the real field
@@ -803,42 +821,47 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
                                     else "below_field" if pctile <= 10 else "plausible")
 
 
-def healer_dps_benchmarks(client, summary: dict, runs: list[dict],
+def role_field_benchmarks(client, summary: dict, runs: list[dict],
                           key_level: int = 12, pages: int = 3) -> dict[str, dict]:
-    """The +key_level field DPS *and* HPS benchmark for the (un-simmed) healer, per dungeon.
+    """+key_level field benchmarks for roster members the simmed-DPS path doesn't cover,
+    per dungeon (timed runs only). Two cases:
 
-    The healer isn't simmed (no SimC ceiling), so they're absent from `summary` and
-    attach_dps_benchmarks skips them — but the run debrief shows both their *damage* and
-    *healing* against the real field. Pull WCL characterRankings for the healer's
-    class/spec twice: metric=dps → p90 "typical" (matches the DPS segment's p90), and
-    metric=hps → p50 median (healing throughput is comp/route-driven, so the median is
-    the fair 'typical', not the top decile). Returns, per dungeon, a stripped-down
-    sim-player dict (no `dps` ceiling): {player, spec, role, top12_typical/best/n/key,
-    hps_typical/hps_best/hps_n}."""
-    healer = next((p for r in runs for p in r.get("party", [])
-                   if p.get("role") == "healer" and p.get("spec") and p.get("class")), None)
-    if not healer:
-        return {}
-    cls, spec, name = healer["class"], healer["spec"], healer["name"]
+    - The HEALER isn't simmed, so they get DPS (p90 "typical" + p50 median, matching the
+      DPS segment) AND HPS (p50 median — healing is comp/route-driven, so the median is
+      the fair 'typical').
+    - The TANK is simmed for DPS already, but not for healing; Brewmaster self-healing is
+      substantial, so they get HPS (p50 median) too.
+
+    Returns {dungeon: {player_name: bench}} where bench carries whichever of
+    top12_typical/median/best/n and hps_typical/best/n apply. Merged into the debrief's
+    per-player lookup (augmenting the simmed tank's dict, creating the healer's)."""
+    roster: dict[str, tuple[str, str, str]] = {}   # name -> (class, spec, role)
+    for r in runs:
+        for p in r.get("party", []):
+            if p.get("class") and p.get("spec") and p.get("name") not in roster:
+                roster[p["name"]] = (p["class"], p["spec"], p.get("role", "dps"))
     out: dict[str, dict] = {}
+    cache: dict[tuple, list[float]] = {}
     for dungeon in (summary.get("by_dungeon") or {}):
         enc = MPLUS_ENCOUNTERS.get(dungeon)
         if not enc:
             continue
-        rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level, pages=pages)
-        dps = sorted((r["dps"] for r in rk if r.get("dps")), reverse=True)
-        if not dps:
-            continue
-        p90 = (statistics.quantiles(dps, n=10, method="inclusive")[8] if len(dps) >= 2 else dps[0])
-        entry = {"player": name, "spec": f"{spec} {cls}", "role": "heal",
-                 "top12_typical": round(p90), "top12_best": round(dps[0]),
-                 "top12_n": len(dps), "top12_key": key_level}
-        hrk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level,
-                                             pages=pages, metric="hps")
-        hps = sorted((r["dps"] for r in hrk if r.get("dps")), reverse=True)  # amount key = hps here
-        if hps:
-            entry["hps_typical"] = round(statistics.median(hps))  # p50 — see docstring
-            entry["hps_best"] = round(hps[0])
-            entry["hps_n"] = len(hps)
-        out[dungeon] = entry
+        timer_ms = (_timer_for(dungeon) or 0) * 1000
+        for name, (cls, spec, role) in roster.items():
+            want_dps = role == "healer"             # healer isn't simmed → needs DPS here
+            want_hps = role in ("healer", "tank")   # healing benchmark for both
+            bench: dict[str, Any] = {"player": name, "spec": f"{spec} {cls}", "role": role,
+                                     "top12_key": key_level}
+            if want_dps:
+                dps = _intime_sorted(client, enc, cls, spec, "dps", key_level, pages, timer_ms, cache)
+                if dps:
+                    bench.update(top12_typical=round(_p90(dps)), top12_median=round(statistics.median(dps)),
+                                 top12_best=round(dps[0]), top12_n=len(dps))
+            if want_hps:
+                hps = _intime_sorted(client, enc, cls, spec, "hps", key_level, pages, timer_ms, cache)
+                if hps:
+                    bench.update(hps_typical=round(statistics.median(hps)),  # p50
+                                 hps_best=round(hps[0]), hps_n=len(hps))
+            if len(bench) > 4:  # got at least one metric beyond the identity keys
+                out.setdefault(dungeon, {})[name] = bench
     return out
