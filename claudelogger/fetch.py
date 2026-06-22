@@ -273,6 +273,14 @@ query ($code: String!, $fightID: Int!, $startTime: Float!, $endTime: Float!) {
 }
 """
 
+_HEALING_TABLE_Q = """
+query ($code: String!, $fightID: Int!, $startTime: Float!, $endTime: Float!) {
+  reportData { report(code: $code) {
+    table(fightIDs: [$fightID], dataType: Healing, startTime: $startTime, endTime: $endTime)
+  } }
+}
+"""
+
 
 def fetch_damage_done(client: WCLClient, code: str, fight: Fight,
                       start_ms: int | None = None, end_ms: int | None = None) -> dict[int, dict[str, int]]:
@@ -300,6 +308,31 @@ def fetch_damage_done(client: WCLClient, code: str, fight: Fight,
         slot = out.setdefault(int(owner), {"total": 0, "active_ms": 0})
         slot["total"] += int(e.get("total", 0) or 0)
         # A pet's active time shouldn't extend the owner's; keep the max seen.
+        slot["active_ms"] = max(slot["active_ms"], int(e.get("activeTime", 0) or 0))
+    return out
+
+
+def fetch_healing_done(client: WCLClient, code: str, fight: Fight,
+                       start_ms: int | None = None, end_ms: int | None = None) -> dict[int, dict[str, int]]:
+    """Per-player effective healing done for a fight: {actor_id: {"total", "active_ms"}}.
+
+    Mirror of fetch_damage_done on the WCL `table` aggregate (dataType: Healing). `total`
+    is effective healing (overheal excluded); pet healing folds into the owner."""
+    res = client.query(
+        _HEALING_TABLE_Q,
+        {"code": code, "fightID": fight.id,
+         "startTime": float(start_ms if start_ms is not None else fight.start_time),
+         "endTime": float(end_ms if end_ms is not None else fight.end_time)},
+    )
+    table = res["data"]["reportData"]["report"].get("table") or {}
+    entries = ((table.get("data") or {}).get("entries")) or table.get("entries") or []
+    out: dict[int, dict[str, int]] = {}
+    for e in entries:
+        owner = e.get("petOwner") or e.get("id")
+        if owner is None:
+            continue
+        slot = out.setdefault(int(owner), {"total": 0, "active_ms": 0})
+        slot["total"] += int(e.get("total", 0) or 0)
         slot["active_ms"] = max(slot["active_ms"], int(e.get("activeTime", 0) or 0))
     return out
 
@@ -436,23 +469,28 @@ _CHAR_RANKINGS_Q = """
 query ($e: Int!, $cls: String!, $spec: String!, $bracket: Int!, $page: Int!) {
   worldData { encounter(id: $e) {
     characterRankings(className: $cls, specName: $spec, difficulty: 10,
-                      metric: dps, bracket: $bracket, page: $page)
+                      metric: %s, bracket: $bracket, page: $page)
   } }
 }
 """
 
 
 def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: str,
-                             spec_name: str, *, key_level: int = 12, pages: int = 1) -> list[dict[str, Any]]:
-    """Top DPS rankings for a class/spec on an encounter at a fixed key level.
+                             spec_name: str, *, key_level: int = 12, pages: int = 1,
+                             metric: str = "dps") -> list[dict[str, Any]]:
+    """Top rankings for a class/spec on an encounter at a fixed key level, by `metric`
+    (``dps`` or ``hps`` — the field name is the per-row amount either way).
 
     WCL's `bracket` is keystone level minus 1 (bracket 11 == +12). Returns
-    [{name, dps, key, guild}] sorted highest-DPS-first across the requested pages."""
+    [{name, dps, key, guild}] sorted highest-first across the requested pages (the
+    `dps` key carries the requested metric's amount)."""
+    metric = "hps" if metric == "hps" else "dps"   # whitelist — value goes into the query
+    query = _CHAR_RANKINGS_Q % metric
     out: list[dict[str, Any]] = []
     for page in range(1, max(1, pages) + 1):
         try:
-            res = client.query(_CHAR_RANKINGS_Q, {"e": encounter_id, "cls": class_name,
-                                                  "spec": spec_name, "bracket": key_level - 1, "page": page})
+            res = client.query(query, {"e": encounter_id, "cls": class_name,
+                                       "spec": spec_name, "bracket": key_level - 1, "page": page})
         except Exception:
             break
         cr = (((res.get("data") or {}).get("worldData") or {}).get("encounter") or {}).get("characterRankings")

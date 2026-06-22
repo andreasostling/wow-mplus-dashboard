@@ -805,14 +805,16 @@ def attach_dps_benchmarks(client, summary: dict, key_level: int = 12, pages: int
 
 def healer_dps_benchmarks(client, summary: dict, runs: list[dict],
                           key_level: int = 12, pages: int = 3) -> dict[str, dict]:
-    """The +key_level field DPS benchmark for the (un-simmed) healer, per dungeon.
+    """The +key_level field DPS *and* HPS benchmark for the (un-simmed) healer, per dungeon.
 
     The healer isn't simmed (no SimC ceiling), so they're absent from `summary` and
-    attach_dps_benchmarks skips them — but the run debrief still wants to show their
-    *damage* contribution against the real field. Pull the same WCL characterRankings
-    (metric=dps) for the healer's class/spec and return the p90 ("typical") + best per
-    dungeon, keyed like a stripped-down sim-player dict (no `dps` ceiling). Returns
-    {dungeon: {player, spec, role, top12_typical, top12_best, top12_n, top12_key}}."""
+    attach_dps_benchmarks skips them — but the run debrief shows both their *damage* and
+    *healing* against the real field. Pull WCL characterRankings for the healer's
+    class/spec twice: metric=dps → p90 "typical" (matches the DPS segment's p90), and
+    metric=hps → p50 median (healing throughput is comp/route-driven, so the median is
+    the fair 'typical', not the top decile). Returns, per dungeon, a stripped-down
+    sim-player dict (no `dps` ceiling): {player, spec, role, top12_typical/best/n/key,
+    hps_typical/hps_best/hps_n}."""
     healer = next((p for r in runs for p in r.get("party", [])
                    if p.get("role") == "healer" and p.get("spec") and p.get("class")), None)
     if not healer:
@@ -828,7 +830,15 @@ def healer_dps_benchmarks(client, summary: dict, runs: list[dict],
         if not dps:
             continue
         p90 = (statistics.quantiles(dps, n=10, method="inclusive")[8] if len(dps) >= 2 else dps[0])
-        out[dungeon] = {"player": name, "spec": f"{spec} {cls}", "role": "heal",
-                        "top12_typical": round(p90), "top12_best": round(dps[0]),
-                        "top12_n": len(dps), "top12_key": key_level}
+        entry = {"player": name, "spec": f"{spec} {cls}", "role": "heal",
+                 "top12_typical": round(p90), "top12_best": round(dps[0]),
+                 "top12_n": len(dps), "top12_key": key_level}
+        hrk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level,
+                                             pages=pages, metric="hps")
+        hps = sorted((r["dps"] for r in hrk if r.get("dps")), reverse=True)  # amount key = hps here
+        if hps:
+            entry["hps_typical"] = round(statistics.median(hps))  # p50 — see docstring
+            entry["hps_best"] = round(hps[0])
+            entry["hps_n"] = len(hps)
+        out[dungeon] = entry
     return out

@@ -50,8 +50,9 @@ def analyze_run(
     death_penalty_s: int = 15,
     downtime_gap_s: float = 8.0,
     pull_dps: dict[int, dict] | None = None,
+    heal_done: dict[int, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
-    """Build the timing + actual-DPS section for one logged run."""
+    """Build the timing + actual-DPS/HPS section for one logged run."""
     boss_ids = boss_npc_game_ids or set()
     pull_dps = pull_dps or {}
     run_ms = max(0, fight.end_time - fight.start_time)
@@ -149,6 +150,28 @@ def analyze_run(
             "class": actor.sub_type,
         }
 
+    # Actual per-player HPS (effective healing). Same shape as dps_actual; rendered as
+    # its own debrief segment. Everyone's healing shows; only the healer gets a field
+    # benchmark (the comparison is meaningful only for them).
+    hps_actual: dict[str, dict[str, Any]] = {}
+    for aid, hd in (heal_done or {}).items():
+        if aid not in party:
+            continue
+        actor = rep.actors.get(aid)
+        if actor is None or not actor.is_player:
+            continue
+        active_s = (hd.get("active_ms", 0) or 0) / 1000.0
+        total = hd.get("total", 0) or 0
+        if total <= 0:
+            continue
+        hps_actual[actor.name] = {
+            "total": total,
+            "active_hps": round(total / active_s, 1) if active_s > 0 else 0.0,
+            "run_hps": round(total / run_s, 1) if run_s > 0 else 0.0,
+            "role": roles.get(aid, ("dps", ""))[0],
+            "class": actor.sub_type,
+        }
+
     return {
         "run_duration_s": round(run_s, 1),
         "timer_s": timer_s,
@@ -166,5 +189,6 @@ def analyze_run(
         "boss_times": boss_times,
         "pulls": pull_rows,
         "dps_actual": dps_actual,
+        "hps_actual": hps_actual,
         "forces_note": "Enemy-forces % is not exposed by the WCL API; per-pull mob counts shown instead.",
     }

@@ -185,8 +185,9 @@ def analyze_report(
              "spec": roles.get(a.id, ("", ""))[1], "class": a.sub_type}
             for a in rep.party(fight)
         ]
-        # Post-run performance: time-loss + actual DPS, and cooldown/defensive economy.
+        # Post-run performance: time-loss + actual DPS/HPS, and cooldown/defensive economy.
         dmg_done = fetch.fetch_damage_done(client, code, fight)
+        heal_done = fetch.fetch_healing_done(client, code, fight)
         # Per-pull DPS via windowed damage tables (skip tiny pulls to limit API calls).
         party_ids = set(fight.friendly_players)
         pull_dps: dict[int, dict] = {}
@@ -202,7 +203,7 @@ def analyze_report(
         timing = run_analysis.analyze_run(
             fight, pull_tallies, findings, dmg_done, rep, roles,
             kb.boss_npc_game_ids or set(), cfg.simc.death_penalty_s, cfg.knobs.downtime_gap_s,
-            pull_dps,
+            pull_dps, heal_done=heal_done,
         )
         tank_id = next((aid for aid in fight.friendly_players
                         if roles.get(aid, ("", ""))[1] == "Brewmaster"), None)

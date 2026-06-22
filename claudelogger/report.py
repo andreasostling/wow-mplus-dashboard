@@ -786,6 +786,7 @@ _HTML = r"""<!doctype html>
   .gapbar .track{position:relative;background:var(--card);border:1px solid var(--line);border-radius:5px;height:18px;overflow:hidden}
   .gapbar .ceil{position:absolute;inset:0;background:#1d2530}
   .gapbar .act{position:absolute;left:0;top:0;bottom:0;background:var(--accent);min-width:2px;display:flex;align-items:center;justify-content:flex-end}
+  .gapbar .act-heal{background:var(--ok)}
   .gapbar .act .lbl{color:#0b0e14;font-size:11px;font-weight:600;padding:0 6px;white-space:nowrap}
   .gapbar .lbl-out{position:absolute;top:0;bottom:0;display:flex;align-items:center;padding-left:4px;font-size:11px;font-weight:600;color:var(--ink);white-space:nowrap}
   .gapbar .meta{font-size:12px;white-space:nowrap}
@@ -1436,6 +1437,37 @@ render();
         cap += ' <span class="muted">WCL = Warcraft Logs.</span>';
         box.append(el('<div class="contrib">'+cap+'</div>'));
       }
+    }
+
+    // B2: HPS — healing throughput, its own segment below DPS. Everyone's healing shows
+    //     (green bars); only the healer carries a field benchmark — the p50 (median) +kl
+    //     HPS for their spec, since healing is comp/route-driven and the median is the
+    //     fair "typical", not the top decile. Mirrors the DPS bars otherwise.
+    const hps = t.hps_actual||{}; const hnames = Object.keys(hps);
+    if(hnames.length){
+      const hsims = simLookup[dnorm(r.dungeon)]||{};
+      const hkl = (Object.values(hsims).find(s=>s&&s.top12_key)||{}).top12_key||12;
+      const hord = hnames.slice().sort((a,b)=>hps[b].run_hps-hps[a].run_hps);
+      const hRoleTag = n => hps[n].role==='tank'?' 🛡️':hps[n].role==='healer'?' 💚':'';
+      const pctClassH = p => p<70?'low':p<90?'lever':'ok-use';
+      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">💚 HPS — healing vs the typical (p50) +${hkl} healer</h3>`));
+      let mxH=1; hord.forEach(n=>{ const s=hsims[n]||{}; mxH=Math.max(mxH, hps[n].run_hps, s.hps_typical||0); });
+      let anyBench=false;
+      hord.forEach(n=>{
+        const h=hps[n], s=hsims[n]||{}, typ=s.hps_typical||0;
+        const actW=Math.round(100*h.run_hps/mxH), typW=typ>0?Math.round(100*typ/mxH):0;
+        const pctT=typ>0?Math.round(100*h.run_hps/typ):null; if(typ>0) anyBench=true;
+        const topMark = typ>0?`<span title="median (p50) +${hkl} ${esc(n)} healer: ${Math.round(typ).toLocaleString()} HPS" style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#e0a040;left:calc(${typW}% - 1px)"></span>`:'';
+        const hpsStr = `${Math.round(h.run_hps/1000)}k`;
+        const inside = actW>=15;
+        const actLabel = inside?`<span class="lbl">${hpsStr}</span>`:'';
+        const tipLabel = inside?'':`<span class="lbl-out" style="left:${actW}%">${hpsStr}</span>`;
+        const meta = pctT!==null?`<span class="${pctClassH(pctT)}" title="vs the p50 (median) +${hkl} WCL healer">${pctT}% p50 WCL</span>`:'';
+        box.append(el(`<div class="gapbar"><span>${esc(n)}${hRoleTag(n)}</span>
+          <span class="track"><span class="act act-heal" style="width:${actW}%" title="${Math.round(h.run_hps).toLocaleString()} run-HPS · ${Math.round(h.active_hps).toLocaleString()} active-HPS">${actLabel}</span>${topMark}${tipLabel}</span>
+          <span class="muted meta">${meta}</span></div>`));
+      });
+      if(anyBench) box.append(el(`<div class="contrib"><span style="color:#e0a040">▎</span> = typical +${hkl} healer (p50 / median WCL HPS for that spec). Only the healer is benchmarked — everyone else&#39;s healing is incidental. WCL = Warcraft Logs.</div>`));
     }
 
     // C: cooldown economy
