@@ -863,3 +863,42 @@ def field_benchmarks_by_key(client, runs: list[dict], pages: int = 3) -> dict[st
                 if len(bench) > 4:
                     out.setdefault(dungeon, {}).setdefault(str(key), {})[name] = bench
     return out
+
+
+def field_pace_by_key(client, runs: list[dict], pages: int = 3) -> dict[str, dict]:
+    """Field CLEAR-TIME distribution per dungeon + key level (timed runs only).
+
+    WCL rankings expose each run's total `duration` but no combat/active-time split, so we
+    can't get the field's *downtime* — only its total clear time. We sample it from one
+    representative DPS spec's ranked logs (the rankings are already cached from
+    field_benchmarks_by_key, so this adds no fetches) and report the median and the
+    fastest-quartile clear time. The debrief compares our run duration to these as a 'pace
+    vs field' proxy (combat + downtime together). Returns {dungeon: {str(key): {...}}}."""
+    rep = next((p for r in runs for p in r.get("party", [])
+                if p.get("role") == "dps" and p.get("class") and p.get("spec")), None)
+    if not rep:
+        return {}
+    cls, spec = rep["class"], rep["spec"]
+    pairs: dict[str, set[int]] = {}
+    for r in runs:
+        if r.get("dungeon") and r.get("key_level"):
+            pairs.setdefault(r["dungeon"], set()).add(int(r["key_level"]))
+    out: dict[str, dict] = {}
+    for dungeon, keys in pairs.items():
+        enc = MPLUS_ENCOUNTERS.get(dungeon)
+        if not enc:
+            continue
+        timer_ms = (_timer_for(dungeon) or 0) * 1000
+        for key in sorted(keys):
+            rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key, pages=pages)
+            durs = sorted(r["duration_ms"] for r in rk
+                          if r.get("duration_ms") and (timer_ms <= 0 or r["duration_ms"] <= timer_ms))
+            if not durs:
+                continue
+            fast = statistics.quantiles(durs, n=4, method="inclusive")[0] if len(durs) >= 4 else durs[0]
+            out.setdefault(dungeon, {})[str(key)] = {
+                "dur_median_s": round(statistics.median(durs) / 1000),
+                "dur_fast_s": round(fast / 1000),  # fastest quartile
+                "dur_n": len(durs), "spec": f"{spec} {cls}", "key": key,
+            }
+    return out

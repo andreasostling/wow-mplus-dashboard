@@ -1401,9 +1401,6 @@ render();
       box.append(el('<div class="contrib" style="margin-top:6px">Boss combat time: '+t.boss_times.map(b=>`${esc(b.name)} ${fmtMin(b.duration_s)}${b.segments>1?` <span class="muted">(${b.segments} phases)</span>`:''}`).join(' · ')+'</div>'));
     box.append(el(`<div class="contrib" style="margin-top:4px">${esc(t.forces_note||'')}</div>`));
 
-    // B: DPS — ONE combined view per player. The bar is actual run-DPS; the orange
-    //    marker is the typical (p90) +kl logger and the faint region is your SimC ceiling,
-    //    with both gap %s on the right. (Replaces the old three near-identical blocks.)
     // % vs a benchmark, coloured on a continuous red→amber→green gradient (0%→120%+),
     // not bucketed. Hue 0 (red) at 0% up to 120 (green) at 100%+; used for every delta.
     const pctColor = p => `hsl(${Math.max(0,Math.min(120,(p||0)*1.2))},68%,58%)`;
@@ -1413,6 +1410,30 @@ render();
       +`<span>0%</span><span style="flex:0 0 160px;height:8px;border-radius:4px;`
       +`background:linear-gradient(to right,${pctColor(0)},${pctColor(50)},${pctColor(83)},${pctColor(100)})"></span>`
       +`<span>100%+</span><span class="muted">= our throughput as a % of the field benchmark (red low → green at/above it)</span></div>`);
+
+    // A2: Downtime — where the non-combat time went (combat / travel-idle / wipe recovery),
+    //     plus clear pace vs the field. WCL exposes only total clear time for the field (no
+    //     combat/active split), so the field comparison is total pace, not downtime alone.
+    {
+      const total=Math.max(1,t.run_duration_s||0), comb=Math.max(0,t.combat_s||0),
+            rec=Math.max(0,t.recovery_s||0), travel=Math.max(0,(t.downtime_s||0)-rec);
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">⏱️ Downtime &amp; clear pace</h3>'));
+      const seg=(secs,col,lab)=> secs>0?`<span title="${lab}: ${fmtMin(secs)} (${Math.round(100*secs/total)}%)" style="flex:0 0 ${100*secs/total}%;background:${col}"></span>`:'';
+      box.append(el(`<div style="display:flex;height:18px;border:1px solid var(--line);border-radius:5px;overflow:hidden;max-width:760px">`
+        +seg(comb,'var(--accent)','combat')+seg(travel,'var(--warn)','travel / idle downtime')+seg(rec,'var(--bad)','wipe recovery')+`</div>`));
+      box.append(el(`<div class="contrib" style="margin-top:4px"><span style="color:var(--accent)">▇</span> combat ${fmtMin(comb)} · <span style="color:var(--warn)">▇</span> travel/idle ${fmtMin(travel)} · <span style="color:var(--bad)">▇</span> recovery ${fmtMin(rec)} — <b>downtime ${t.downtime_pct||0}%</b> of the run.</div>`));
+      const pace=((DATA.simc&&DATA.simc.field_pace&&DATA.simc.field_pace[r.dungeon])||{})[String(r.key_level)];
+      if(pace && pace.dur_median_s && t.run_duration_s){
+        const our=t.run_duration_s, med=pace.dur_median_s, fast=pace.dur_fast_s, pct=Math.round(100*med/our);
+        box.append(el(`<div class="contrib" style="margin-top:6px">Clear time <b>${fmtMin(our)}</b> vs +${r.key_level} field median <b>${fmtMin(med)}</b> (fastest 25%: ${fmtMin(fast)}, n=${pace.dur_n}) — `
+          +`${pctSpan(pct,'field median clear time ÷ our clear time — >100% = faster than the field median')} of field-median pace</span> `
+          +`<span class="muted">(${our<=med?fmtMin(med-our)+' faster':fmtMin(our-med)+' slower'})</span>.</div>`));
+        box.append(el(`<div class="contrib muted" style="font-size:11px">WCL exposes only total clear time for the field, not its downtime — so this is total pace (combat + downtime), not downtime alone.</div>`));
+      }
+    }
+
+    // B: DPS — ONE combined view per player. The bar is actual run-DPS; field markers are
+    //    p10/p50/p90 at the run's own key, the faint region is your SimC ceiling.
     const dps = t.dps_actual||{}; const names = Object.keys(dps);
     if(names.length){
       const sims = simLookup[dnorm(r.dungeon)]||{}; const haveSim = Object.keys(sims).length>0;
