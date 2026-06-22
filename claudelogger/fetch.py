@@ -392,7 +392,8 @@ def get_roles(client: WCLClient, code: str, fight_id: int) -> dict[int, tuple[st
     return roles
 
 
-def fetch_player_ilvls(client: WCLClient, code: str, fight_id: int) -> dict[str, int]:
+def fetch_player_ilvls(client: WCLClient, code: str, fight_id: int, *,
+                       cache_only: bool = False) -> dict[str, int]:
     """Return {player_name: equipped item level} for a report's fight.
 
     The `characterRankings` scalar carries no item level, but each ranked row points at a
@@ -404,7 +405,7 @@ def fetch_player_ilvls(client: WCLClient, code: str, fight_id: int) -> dict[str,
     a single field row's ilvl is non-critical, so we swallow any failure and skip that report
     (the capped sample just loses that row, falling back to the full field if too thin)."""
     try:
-        res = client.query(_ROLES_Q, {"code": code, "fight": fight_id})
+        res = client.query(_ROLES_Q, {"code": code, "fight": fight_id}, cache_only=cache_only)
         pd = res["data"]["reportData"]["report"]["playerDetails"]["data"]["playerDetails"]
     except Exception:
         return {}
@@ -503,7 +504,8 @@ query ($e: Int!, $cls: String!, $spec: String!, $bracket: Int!, $page: Int!) {
 
 def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: str,
                              spec_name: str, *, key_level: int = 12, pages: int = 1,
-                             metric: str = "dps", with_ilvl: bool = False) -> list[dict[str, Any]]:
+                             metric: str = "dps", with_ilvl: bool = False,
+                             cache_only: bool = False) -> list[dict[str, Any]]:
     """Top rankings for a class/spec on an encounter at a fixed key level, by `metric`
     (``dps`` or ``hps`` — the field name is the per-row amount either way).
 
@@ -522,7 +524,8 @@ def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: s
     for page in range(1, max(1, pages) + 1):
         try:
             res = client.query(query, {"e": encounter_id, "cls": class_name,
-                                       "spec": spec_name, "bracket": key_level - 1, "page": page})
+                                       "spec": spec_name, "bracket": key_level - 1, "page": page},
+                               cache_only=cache_only)
         except Exception:
             break
         cr = (((res.get("data") or {}).get("worldData") or {}).get("encounter") or {}).get("characterRankings")
@@ -536,11 +539,12 @@ def fetch_character_rankings(client: WCLClient, encounter_id: int, class_name: s
         if not (isinstance(cr, dict) and cr.get("hasMorePages")):
             break
     if with_ilvl:
-        _attach_ranking_ilvls(client, out)
+        _attach_ranking_ilvls(client, out, cache_only=cache_only)
     return out
 
 
-def _attach_ranking_ilvls(client: WCLClient, rows: list[dict[str, Any]]) -> None:
+def _attach_ranking_ilvls(client: WCLClient, rows: list[dict[str, Any]], *,
+                          cache_only: bool = False) -> None:
     """Set each ranking row's ``ilvl`` from its report's playerDetails, in place.
 
     Groups rows by (report_code, fightID) so each report is fetched once (and cached),
@@ -552,7 +556,7 @@ def _attach_ranking_ilvls(client: WCLClient, rows: list[dict[str, Any]]) -> None
         if code and fid is not None:
             by_report.setdefault((code, int(fid)), []).append(r)
     for (code, fid), group in by_report.items():
-        ilvls = fetch_player_ilvls(client, code, fid)
+        ilvls = fetch_player_ilvls(client, code, fid, cache_only=cache_only)
         if not ilvls:
             continue
         for r in group:

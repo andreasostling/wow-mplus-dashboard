@@ -273,6 +273,11 @@ class SimcKnobs:
     ilvl_cap_delta: int = 10
     ilvl_cap_pages: int = 2                     # rankings pages to ilvl-join (~100 rows/page)
     ilvl_cap_min_n: int = 15                    # below this many capped rows, fall back to full field
+    # Offline mode for the ilvl join: use only already-cached playerDetails, never hit the
+    # network (uncached reports just fall back). The full cold join exceeds WCL's 3600
+    # points/hr budget, so this rebuilds from whatever's cached without burning the budget —
+    # the peer field then fills in over subsequent normal (online) runs as the cache grows.
+    ilvl_cap_cache_only: bool = False
 
 
 @dataclass
@@ -316,6 +321,8 @@ class Config:
             cfg.simc.reference_profiles_dir = rpd
         if (icap := env.get("CLAUDELOGGER_ILVL_CAP")) is not None and icap != "":
             cfg.simc.ilvl_cap_enabled = icap not in ("0", "false", "False", "no")
+        if (ico := env.get("CLAUDELOGGER_ILVL_CACHE_ONLY")) is not None and ico != "":
+            cfg.simc.ilvl_cap_cache_only = ico not in ("0", "false", "False", "no")
         cfg.cache_dir.mkdir(exist_ok=True)
         cfg.out_dir.mkdir(exist_ok=True)
         return cfg

@@ -953,7 +953,7 @@ def _p10(vals: list[float]) -> float:
 
 def _ilvl_field_rows(client, enc: int, cls: str, spec: str, key_level: int,
                      pages: int, timer_ms: int,
-                     cache: dict | None = None) -> list[tuple[float, int]]:
+                     cache: dict | None = None, cache_only: bool = False) -> list[tuple[float, int]]:
     """In-time (dps, ilvl) field rows for an encounter/spec/key — for the ilvl-capped field.
 
     Like `_intime_sorted` but keeps each row's joined item level (rows without one are
@@ -963,7 +963,8 @@ def _ilvl_field_rows(client, enc: int, cls: str, spec: str, key_level: int,
     if cache is not None and ck in cache:
         return cache[ck]
     rk = fetch.fetch_character_rankings(client, enc, cls, spec, key_level=key_level,
-                                        pages=pages, metric="dps", with_ilvl=True)
+                                        pages=pages, metric="dps", with_ilvl=True,
+                                        cache_only=cache_only)
     rows = [(r["dps"], int(r["ilvl"])) for r in rk
             if r.get("dps") and r.get("ilvl")
             and (timer_ms <= 0 or (r.get("duration_ms") or 0) <= timer_ms)]
@@ -979,7 +980,8 @@ def _capped_field_block(client, enc: int, cls: str, spec: str, key_level: int,
     of the roster char's `baseline_ilvl`. Returns a block with the capped p10/p50/p90 and
     sample size, or — when too few peers fall in range — a `fallback` marker (the renderer
     then shows the full field instead). None if no ilvl-joined rows at all."""
-    rows = _ilvl_field_rows(client, enc, cls, spec, key_level, knobs.ilvl_cap_pages, timer_ms, cache)
+    rows = _ilvl_field_rows(client, enc, cls, spec, key_level, knobs.ilvl_cap_pages, timer_ms,
+                            cache, cache_only=knobs.ilvl_cap_cache_only)
     if not rows:
         return None
     cap = baseline_ilvl + knobs.ilvl_cap_delta

@@ -61,12 +61,18 @@ class WCLClient:
         *,
         use_cache: bool = True,
         retries: int = 3,
+        cache_only: bool = False,
     ) -> dict[str, Any]:
         variables = variables or {}
         cache_key = json.dumps({"q": query, "v": variables}, sort_keys=True)
         cache_path = self._cache_path(cache_key)
         if use_cache and cache_path.exists():
             return json.loads(cache_path.read_text(encoding="utf-8"))
+        if cache_only:
+            # Offline mode: never hit the network. Caller decides how to degrade (e.g. the
+            # ilvl join skips this report, falling back to the full field). Used to rebuild
+            # from cache when the WCL rate-limit budget is spent.
+            raise WCLError("cache_only: query not cached")
 
         token = self._ensure_token()
         body = json.dumps({"query": query, "variables": variables}).encode()
