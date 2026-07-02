@@ -314,8 +314,9 @@ def _emit(cfg: Config, runs: list[dict], route_info: list[dict] | None = None,
     if log_positions is None:
         log_positions = combatlog.load_positions(cfg.cache_dir)
     if log_positions:
-        print(f"combat log: positions for {len(log_positions)} dungeon run(s) "
-              f"({combatlog.find_archive()})", file=sys.stderr)
+        archives = combatlog.find_archives()
+        print(f"combat log: positions for {len(log_positions)} dungeon(s) "
+              f"merged from {len(archives)} archive(s)", file=sys.stderr)
     briefings = report.build_dungeon_briefings(runs, route_info, log_positions, public_danger,
                                                guide_data, cache_dir=cfg.cache_dir,
                                                min_leak_sample=cfg.knobs.briefing_min_leak_sample)

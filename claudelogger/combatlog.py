@@ -31,23 +31,33 @@ DEFAULT_ARCHIVE_DIR = "/mnt/c/Program Files (x86)/World of Warcraft/_retail_/Log
 
 
 def find_archive(explicit: str | None = None) -> Path | None:
-    """Resolve the combat-log archive: explicit path/env > newest .txt in the archive dir."""
+    """Resolve the newest combat-log archive: explicit path/env > newest .txt in the dir."""
+    archives = find_archives(explicit)
+    return archives[-1] if archives else None
+
+
+def find_archives(explicit: str | None = None) -> list[Path]:
+    """Resolve ALL combat-log archives, oldest→newest by mtime.
+
+    The WCL uploader rotates the client log into one archive .txt per capture session, so
+    a season's runs are spread across several files (e.g. one per raid night). An explicit
+    file resolves to just that file; an explicit/default *directory* returns every .txt so
+    positions can be merged across sessions (see `load_positions`)."""
     cand = explicit or os.environ.get("CLAUDELOGGER_COMBATLOG")
     if cand:
         p = Path(cand)
         if p.is_file():
-            return p
+            return [p]
         if p.is_dir():
-            return _newest_txt(p)
-        return None
-    return _newest_txt(Path(DEFAULT_ARCHIVE_DIR))
+            return _all_txt(p)
+        return []
+    return _all_txt(Path(DEFAULT_ARCHIVE_DIR))
 
 
-def _newest_txt(d: Path) -> Path | None:
+def _all_txt(d: Path) -> list[Path]:
     if not d.is_dir():
-        return None
-    txts = sorted(d.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return txts[0] if txts else None
+        return []
+    return sorted(d.glob("*.txt"), key=lambda p: p.stat().st_mtime)
 
 
 # Routine adds spawned by other mobs as normal pull mechanics — NOT extra pulls the
@@ -253,22 +263,42 @@ def extract_all(path: Path) -> dict[str, dict[str, Any]]:
             for nrm, gm in by_dungeon_guid.items()}
 
 
+def _merge_runs(dst: dict[str, dict[str, Any]], src: dict[str, dict[str, Any]]) -> None:
+    """Fold one archive's extract_all output into an accumulator (in place).
+
+    Same-dungeon runs from different archives merge exactly like same-archive runs do:
+    spawn lists concatenate per npc_id (off-route localization keeps the most-active
+    spawn), and each player's max HP takes the max across archives."""
+    for dungeon, entry in src.items():
+        acc = dst.setdefault(dungeon, {"mobs": {}, "player_max_hp": {}})
+        for npc_id, spawns in entry.get("mobs", {}).items():
+            acc["mobs"].setdefault(npc_id, []).extend(spawns)
+        for name, hp in entry.get("player_max_hp", {}).items():
+            if hp > acc["player_max_hp"].get(name, 0):
+                acc["player_max_hp"][name] = hp
+
+
 # Bump when the extract_all output shape changes, so stale caches are rejected.
 _CACHE_VERSION = 2
 
 
 def load_positions(cache_dir: Path, archive: Path | None = None, *, refresh: bool = False
                    ) -> dict[str, dict[str, Any]]:
-    """Cached extract_all: re-parses only when the archive (or output shape) changes.
+    """Cached, multi-archive extract_all: re-parses only when the set of archives (or the
+    output shape) changes.
 
-    {dungeon: {"mobs": {npc_id:[spawn]}, "player_max_hp": {name:hp}}}; npc_id keys are
-    restored to int after the JSON round-trip. {} if no archive.
+    With no explicit `archive`, merges EVERY .txt in the archive dir so positions cover the
+    whole season (the WCL uploader rotates one file per session — see `find_archives`). An
+    explicit path restricts to that single file. {dungeon: {"mobs": {npc_id:[spawn]},
+    "player_max_hp": {name:hp}}}; npc_id keys are restored to int after the JSON round-trip.
+    {} if no archive.
     """
-    archive = archive or find_archive()
-    if archive is None:
+    archives = [archive] if archive is not None else find_archives()
+    if not archives:
         return {}
     cache = cache_dir / "combatlog_positions.json"
-    key = f"v{_CACHE_VERSION}:{archive}:{int(archive.stat().st_mtime)}"
+    sig = ";".join(f"{p}:{int(p.stat().st_mtime)}" for p in archives)
+    key = f"v{_CACHE_VERSION}:{sig}"
     if cache.exists() and not refresh:
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
@@ -278,7 +308,9 @@ def load_positions(cache_dir: Path, archive: Path | None = None, *, refresh: boo
                         for d, e in data["runs"].items()}
         except (json.JSONDecodeError, OSError, KeyError, ValueError):
             pass
-    runs = extract_all(archive)
+    runs: dict[str, dict[str, Any]] = {}
+    for arc in archives:
+        _merge_runs(runs, extract_all(arc))
     try:
         cache.write_text(json.dumps({"_key": key, "runs": runs}), encoding="utf-8")
     except OSError:
