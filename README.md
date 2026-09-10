@@ -76,9 +76,9 @@ python -m claudelogger loot --owned owned-loot.json --json
 
 `loot` ranks the active MID2 dungeon pool using the guide-listed upgrades in
 `data/loot-priorities.json`; these are candidates to consider, not unconditional BiS.
-Each unresolved weapon or trinket starts at 3, neck/ring/off-hand at 2, and armor
-at 1. Weapon targets receive a 0.25x multiplier because the group is crafting weapons.
-DPS targets then receive a 1.5x role multiplier; tank and healer targets remain at
+Each unresolved trinket scores 3, neck/ring/off-hand scores 2, armor scores 1, and
+weapons score 0.25 because the group is crafting them. DPS targets receive a 1.5x role
+multiplier; tank and healer targets remain at
 1x. The generated GitHub Pages dashboard displays the current team ranking above the
 pre-run briefing. Item IDs and boss drops are deliberately left unresolved until verified from
 a live game item API, so the catalog uses stable target IDs for ownership tracking.

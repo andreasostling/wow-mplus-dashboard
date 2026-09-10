@@ -19,7 +19,7 @@ The repository maintains two focused queued tasks in [docs/tasks/](docs/tasks/):
 - Report the highest-value counter first: stop, avoid, mitigate, then heal.
 - Treat `analysis.json` as the structured source of truth and generate portable dashboard/briefing artifacts from it.
 - Keep raw peer rankings separate from gear-fair BiS-ceiling and ilvl-capped comparisons.
-- Rank dungeon loot by unresolved guide-listed targets: weapons and trinkets start at 3, jewelry and off-hands at 2, and armor at 1. Multiply weapon targets by 0.25 because the group is crafting weapons, then multiply DPS players' scores by 1.5; tank and healer scores remain at 1. These targets are candidates to consider, not unconditional BiS.
+- Rank dungeon loot by unresolved guide-listed targets: trinkets weigh 3, jewelry and off-hands weigh 2, armor weighs 1, and weapons have a 0.25 baseline because the group is crafting them. Multiply DPS players' scores by 1.5; tank and healer scores remain at 1. These targets are candidates to consider, not unconditional BiS.
 - Use the eight Midnight Season 2 Keystone Guru routes in `routes.json` and show the matching quick boss videos in each dashboard briefing.
 
 ## Open questions

@@ -28,20 +28,29 @@ class TestLootCatalog(unittest.TestCase):
     def test_expected_full_priority_and_scores(self):
         rows = loot.rank_dungeons(self.catalog)
         self.assertEqual([(r["dungeon"], r["total_weight"], r["target_count"]) for r in rows], [
-            ("Altar of Fangs", 20.75, 8), ("Murder Row", 20.5, 7),
-            ("Voidscar Arena", 13.25, 5), ("Temple of Sethraliss", 13.125, 8),
-            ("The Blinding Vale", 13.125, 7), ("King's Rest", 11.75, 6),
-            ("Ruby Life Pools", 10.625, 7), ("Den of Nalorakk", 10, 5),
+            ("Murder Row", 20.5, 7), ("Altar of Fangs", 19.25, 8),
+            ("Voidscar Arena", 12.75, 5), ("Temple of Sethraliss", 12.375, 8),
+            ("The Blinding Vale", 12.375, 7), ("King's Rest", 10.25, 6),
+            ("Den of Nalorakk", 10, 5), ("Ruby Life Pools", 9.875, 7),
         ])
 
     def test_dps_targets_receive_one_point_five_role_multiplier(self):
         altar = next(row for row in loot.rank_dungeons(self.catalog) if row["dungeon"] == "Altar of Fangs")
         gaddini = next(player for player in altar["players"] if player["player"] == "Gaddini")
         cybop = next(player for player in altar["players"] if player["player"] == "Cybop")
-        self.assertEqual((gaddini["role"], gaddini["base_weight"], gaddini["slot_adjusted_weight"],
+        self.assertEqual((gaddini["role"], gaddini["base_weight"],
                           gaddini["role_multiplier"], gaddini["remaining_weight"]),
-                         ("dps", 3, 0.75, 1.5, 1.125))
+                         ("dps", 0.25, 1.5, 0.375))
         self.assertEqual((cybop["role"], cybop["role_multiplier"]), ("tank", 1.0))
+
+    def test_weapons_use_direct_point_two_five_baseline(self):
+        weapons = [target for target in self.catalog["targets"] if target["slot"] == "weapon"]
+        self.assertTrue(weapons)
+        self.assertTrue(all(target["weight"] == 0.25 for target in weapons))
+        self.assertFalse(hasattr(loot, "SLOT_MULTIPLIERS"))
+        for row in loot.rank_dungeons(self.catalog):
+            for player in row["players"]:
+                self.assertNotIn("slot_adjusted_weight", player)
 
     def test_nullable_item_and_source_are_valid_and_target_id_filters_owned(self):
         target = next(t for t in self.catalog["targets"] if t["target_id"] == "konstanten-den-pilfered-band")
@@ -59,7 +68,7 @@ class TestLootCatalog(unittest.TestCase):
     def test_exact_item_name_selector_filters_owned(self):
         row = next(r for r in loot.rank_dungeons(self.catalog, {"Stickerduva": {"Jeweled Dagger of Subjugation"}})
                    if r["dungeon"] == "King's Rest")
-        self.assertEqual(row["total_weight"], 10.625)
+        self.assertEqual(row["total_weight"], 9.875)
 
     def test_rejects_unknown_and_ambiguous_selectors(self):
         with self.assertRaisesRegex(loot.LootCatalogError, "does not match"):
@@ -96,6 +105,6 @@ class TestLootCatalog(unittest.TestCase):
             dashboard = path.read_text(encoding="utf-8")
         self.assertIn('"loot_priority"', dashboard)
         self.assertIn('Dungeon loot priority', dashboard)
-        self.assertIn('Run ${esc(top.dungeon)} first.', dashboard)
+        self.assertIn('Prioritize ${esc(top.dungeon)}.', dashboard)
         self.assertIn('${esc(player.player)} (${esc(player.spec)})', dashboard)
         self.assertIn('${esc(target.item_name)}', dashboard)

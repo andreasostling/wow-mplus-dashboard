@@ -11,7 +11,6 @@ from .config import ACTIVE_ROSTER
 
 CATALOG_SCHEMA_VERSION = 2
 ROLE_MULTIPLIERS = {"tank": 1.0, "healer": 1.0, "dps": 1.5}
-SLOT_MULTIPLIERS = {"weapon": 0.25}
 
 
 class LootCatalogError(ValueError):
@@ -177,14 +176,10 @@ def rank_dungeons(catalog: dict[str, Any], owned: dict[str, set[int | str]] | No
             if targets:
                 role = ACTIVE_ROSTER[player][2]
                 base_weight = sum(t["weight"] for t in targets)
-                slot_adjusted_weight = sum(
-                    t["weight"] * SLOT_MULTIPLIERS.get(t["slot"], 1.0) for t in targets
-                )
                 role_multiplier = ROLE_MULTIPLIERS[role]
                 players.append({"player": player, "spec": ACTIVE_ROSTER[player][1], "role": role,
                                 "base_weight": base_weight, "role_multiplier": role_multiplier,
-                                "slot_adjusted_weight": slot_adjusted_weight,
-                                "remaining_weight": slot_adjusted_weight * role_multiplier,
+                                "remaining_weight": base_weight * role_multiplier,
                                 "targets": targets})
         rows.append({"dungeon": dungeon["name"], "slug": dungeon["slug"], "total_weight": sum(p["remaining_weight"] for p in players), "target_count": sum(len(p["targets"]) for p in players), "players": players})
     return sorted(rows, key=lambda row: (-row["total_weight"], -row["target_count"], row["dungeon"]))

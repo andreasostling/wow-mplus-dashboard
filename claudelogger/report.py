@@ -692,7 +692,6 @@ def _dashboard_payload(season: dict, runs: list[dict], briefings: dict | None = 
         payload["loot_priority"] = {
             "season": catalog["season"],
             "role_multipliers": loot.ROLE_MULTIPLIERS,
-            "slot_multipliers": loot.SLOT_MULTIPLIERS,
             "rankings": loot.rank_dungeons(catalog),
         }
     except (OSError, loot.LootCatalogError):
@@ -739,7 +738,7 @@ def write_html_artifact(out_dir: Path, season: dict, runs: list[dict], briefings
 _HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClaudeLogger — M+ Analysis</title>
+<title>Mythic+ Team Dashboard</title>
 <style>
   :root{--bg:#0f1115;--card:#171a21;--ink:#e7e9ee;--mut:#9aa3b2;--line:#262b36;
         --bad:#ff5d5d;--ok:#46d39a;--warn:#ffb454;--accent:#6aa3ff;}
@@ -825,25 +824,25 @@ _HTML = r"""<!doctype html>
   }
 </style></head>
 <body><div class="wrap">
-  <h1>Mythic+ Analysis</h1>
+  <h1>Mythic+ Team Dashboard</h1>
   <p class="sub" id="sub"></p>
 
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="briefing">Briefing</button>
     <button class="tab" data-tab="deaths">Deaths</button>
-    <button class="tab" data-tab="offroute">Off-route mobs</button>
-    <button class="tab" data-tab="dps">DPS &amp; cooldowns</button>
-    <button class="tab" data-tab="progression">Progression</button>
+    <button class="tab" data-tab="offroute">Extra mobs</button>
+    <button class="tab" data-tab="dps">Performance</button>
+    <button class="tab" data-tab="progression">Run history</button>
   </div>
 
   <div class="tabpanel active" id="tab-briefing">
   <section id="loot-section" style="display:none">
   <h2 style="margin-top:14px">Dungeon loot priority</h2>
   <div id="loot-recommendation" class="verdict"></div>
-  <div class="contrib" style="margin:-4px 0 8px">Guide-listed upgrade candidates: weapons and trinkets start at 3, jewelry and off-hands at 2, and armor at 1. Weapon scores are reduced to 0.25× because the group is crafting weapons; DPS scores then receive a 1.5× multiplier. This list assumes no catalogued target is already owned.</div>
-  <table id="loot-priority"><thead><tr><th>Priority</th><th>Dungeon</th><th>Score</th><th>Targets</th><th>Upgrade candidates</th></tr></thead><tbody></tbody></table>
+  <div class="contrib" style="margin:-4px 0 8px">Team scoring: trinkets 3, jewelry and off-hands 2, armor 1, and weapons 0.25 because the group is crafting them. DPS upgrades receive a 1.5× role weight. The ranking assumes nobody already owns a listed upgrade.</div>
+  <table id="loot-priority"><thead><tr><th>Priority</th><th>Dungeon</th><th>Team score</th><th>Listed upgrades</th><th>Upgrade details</th></tr></thead><tbody></tbody></table>
   </section>
-  <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch</h2>
+  <h2 style="margin-top:14px">🗺️ Dungeon plan: route, stops and boss guide</h2>
   <div class="controls"><select id="fBrief"></select><span id="route-link-top" class="hdr-btns"></span></div>
   <div id="briefing"></div>
   </div>
@@ -851,16 +850,16 @@ _HTML = r"""<!doctype html>
   <div class="tabpanel" id="tab-deaths">
   <div class="cards" id="cards"></div>
 
-  <h2>What's killing us — cause breakdown</h2>
-  <div class="contrib" style="margin:-4px 0 8px">Overview by cause, season-wide. Click a bar to drill into the Death log below, filtered to that cause.</div>
+  <h2>Causes of death</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Season totals by cause. Select a bar to filter the death log.</div>
   <div class="bars" id="buckets"></div>
 
-  <h2>Mobs that needed a kick / stun</h2>
-  <div class="contrib" style="margin:-4px 0 8px">Retrospective — mobs whose casts we failed to stop this season. The forward plan for these is the Briefing tab's route stop targets.</div>
+  <h2>Mobs whose casts needed a stop</h2>
+  <div class="contrib" style="margin:-4px 0 8px">These mobs caused deaths when interruptible or crowd-controllable casts went through. Use the Briefing tab to plan assignments before the key.</div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="ccmobs"></div>
 
-  <h2>Interruptible casts that leaked (pull-level)</h2>
-  <div class="contrib" style="margin:-4px 0 8px">Retrospective evidence behind the Briefing tab's route stop-targets Dmg/cast column — the casts that actually got through.</div>
+  <h2>Interruptible casts that went through</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Logged casts by pull. Their damage informs the stop priorities in the Briefing tab.</div>
   <div class="bars" id="leaked"></div>
 
   <h2>Death log</h2>
@@ -875,36 +874,35 @@ _HTML = r"""<!doctype html>
       <option value="30">Last 30 days</option>
     </select>
     <label class="muted" title="Keep the most recent run visible even if it falls outside the time window"><input type="checkbox" id="fLatest" checked> always include latest run</label>
-    <label class="muted"><input type="checkbox" id="fAvoid"> avoidable only</label>
-    <label class="muted"><input type="checkbox" id="fHideCascade" checked> hide wipe-cascade</label>
+    <label class="muted"><input type="checkbox" id="fAvoid"> preventable only</label>
+    <label class="muted"><input type="checkbox" id="fHideCascade" checked> hide follow-on wipe deaths</label>
   </div>
   <table id="deaths"><thead><tr>
     <th data-k="dungeon">Dungeon</th><th data-k="player">Player</th><th data-k="role">Role</th>
-    <th data-k="time_in_fight_s">t(s)</th><th data-k="killer">Killer</th>
-    <th data-k="bucket">Cause</th><th data-k="avoidable">Avoid?</th>
-    <th data-k="confidence">Conf</th><th>Breakdown</th><th>Healer</th><th>Defensive</th>
+    <th data-k="time_in_fight_s">Time</th><th data-k="killer">Killer</th>
+    <th data-k="bucket">Cause</th><th data-k="avoidable">Preventable?</th>
+    <th data-k="confidence">Confidence</th><th>Damage sources</th><th>Healing</th><th>Defensive use</th>
   </tr></thead><tbody></tbody></table>
-  <div class="contrib" style="margin-top:6px"><b>Healer column</b> — was healing the lever?
-    <b>heal more</b> = victim sat low long enough to react with little healing received (healer alive, not CC’d, had mana);
-    <b>not on healer</b> = the lethal cast was kickable/stunnable, or a knockback/fall — fix the stop, not the healing;
-    <b>healer CC’d</b> / <b>healer OOM</b> = a CC or mana problem, not throughput;
-    <b>1-shot</b> = single hit from full HP, unreactable; <b>kept up</b> = dropped too fast to react, or got substantial healing.
-    Hover any cell for the specific detail.</div>
+  <div class="contrib" style="margin-top:6px"><b>Healing results:</b>
+    <b>more healing possible</b> means the player stayed low long enough to react while the healer was free and had mana;
+    <b>not a healing issue</b> means an interrupt, stop or movement was the stronger answer;
+    <b>healer controlled</b> or <b>out of mana</b> names the actual constraint;
+    <b>one-shot</b> means there was no practical reaction window.</div>
   </div>
 
   <div class="tabpanel" id="tab-dps">
-  <h2>Run debrief — time, DPS &amp; cooldowns</h2>
+  <h2>Run performance: time, damage and cooldowns</h2>
   <div class="controls"><select id="fRun"></select></div>
   <div id="run-debrief"></div>
 
   <div id="simc-section" style="display:none">
-  <h2>SimC ceiling — potential DPS by dungeon</h2>
-  <div class="contrib" style="margin:-4px 0 8px">Cross-dungeon <em>potential</em> at your gear (no specific run). The run debrief above is what you actually did; this is the simmed ceiling per spec/dungeon vs the real +12 field.</div>
+  <h2>Simulated DPS potential by dungeon</h2>
+  <div class="contrib" style="margin:-4px 0 8px">Estimated damage at the group's current gear, compared with logged +12 runs. Use the run performance section above for actual results.</div>
   <div class="controls"><select id="fSimcDungeon"></select></div>
   <table id="simc-dps"><thead><tr>
-    <th>Dungeon</th><th>Player</th><th>Spec</th><th>Our DPS (SimC)</th><th>Top +12 log</th><th>Ours vs top</th><th>Role</th>
+    <th>Dungeon</th><th>Player</th><th>Spec</th><th>Simulated DPS</th><th>Best +12 log</th><th>Sim vs best</th><th>Role</th>
   </tr></thead><tbody></tbody></table>
-  <div class="contrib" style="margin-top:4px">“Top +12 log” = the best real WCL +12 parse for that spec (those players out-gear us, so it’s an aspirational ceiling, not a fair-gear target). The bar shows our simmed DPS against that top parse. ⚠ = our sim sits above ~p90 of the real field — likely optimistic for this spec (hover for the typical-logger number).</div>
+  <div class="contrib" style="margin-top:4px">The best +12 log is an aspirational reference, not a gear-matched target. A warning means the simulation is above roughly 90% of logged runs and may be optimistic for that spec.</div>
 
   <h2>Route analysis</h2>
   <div class="controls"><select id="fRouteDungeon"></select></div>
@@ -913,13 +911,13 @@ _HTML = r"""<!doctype html>
   </div>
 
   <div class="tabpanel" id="tab-offroute">
-  <h2>⚠️ Off-route mobs — pulled but not on your planned route</h2>
+  <h2>⚠️ Extra mobs pulled outside the planned route</h2>
   <div class="controls"><select id="fOffroute"></select></div>
   <div id="offroute"></div>
   </div>
 
   <div class="tabpanel" id="tab-progression">
-  <h2>Progression — runs over time</h2>
+  <h2>Run history</h2>
   <div id="prog-cards" class="cards"></div>
   <table id="progression"><thead><tr>
     <th data-k="date_ms">Date</th><th data-k="dungeon">Dungeon</th><th data-k="key_level">Key</th>
@@ -927,8 +925,7 @@ _HTML = r"""<!doctype html>
     <th data-k="downtime_pct">Downtime</th><th data-k="group_dps">Group DPS</th>
     <th data-k="new_best">New best</th>
   </tr></thead><tbody></tbody></table>
-  <div class="contrib" style="margin-top:8px">One row per logged run. Run <code>season</code> to
-    accumulate more runs over time and watch deaths/timer/DPS trend.</div>
+  <div class="contrib" style="margin-top:8px">Each row is one logged run. Compare key results, deaths, downtime and group damage over time.</div>
   </div>
 
   <footer id="foot"></footer>
@@ -1014,16 +1011,18 @@ function syncDungeon(value, origin){
   _syncing = false;
 }
 
+const plural=(n,one,many=one+'s')=>`${n} ${n===1?one:many}`;
 document.getElementById('sub').textContent =
-  `${S.runs_analyzed} run(s) · generated ${S.generated} · ${S.wipes||0} wipe(s), `
-  + `${S.wipe_cascade_excluded||0} cascade death(s) excluded from cause stats (${S.deaths_incl_cascade||S.total_deaths} total)`;
-const cards=[["Deaths (cause-relevant)",S.total_deaths],["Avoidable",`${S.avoidable_deaths} (${S.avoidable_pct}%)`],
+  `${plural(S.runs_analyzed,'run')} · updated ${S.generated} · ${plural(S.wipes||0,'wipe')}; `
+  + `${plural(S.wipe_cascade_excluded||0,'follow-on death')} excluded from cause totals `
+  + `(${S.deaths_incl_cascade||S.total_deaths} deaths logged)`;
+const cards=[["Deaths analyzed",S.total_deaths],["Avoidable",`${S.avoidable_deaths} (${S.avoidable_pct}%)`],
   ["Wipes",`${S.wipes||0}`],
-  ["Interrupt-preventable",S.stun_verdict.interrupt_preventable_deaths||0],
-  ["Stun-preventable",S.stun_verdict.stun_preventable_deaths||0],
-  ["Defensive would've saved",S.defensive_savable_count||0],
-  ["'Heal more' cases",S.heal_more_count],
-  ["CC-starved pulls",`${S.pulls_cc_starved||0} / ${S.pulls_total||0}`]];
+  ["Could be interrupted",S.stun_verdict.interrupt_preventable_deaths||0],
+  ["Could be stopped",S.stun_verdict.stun_preventable_deaths||0],
+  ["Defensive could save",S.defensive_savable_count||0],
+  ["More healing could help",S.heal_more_count],
+  ["Pulls short on stops",`${S.pulls_cc_starved||0} / ${S.pulls_total||0}`]];
 document.getElementById('cards').append(...cards.map(([l,n])=>
   el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
 
@@ -1034,15 +1033,15 @@ if(LOOT && LOOT.rankings && LOOT.rankings.length){
   document.getElementById('loot-section').style.display='';
   const top = LOOT.rankings[0];
   document.getElementById('loot-recommendation').innerHTML =
-    `<b>Run ${esc(top.dungeon)} first.</b> It has the highest current team score `
-    + `(${esc(top.total_weight)} across ${esc(top.target_count)} remaining targets).`;
+    `<b>Prioritize ${esc(top.dungeon)}.</b> It offers the strongest current team loot value: `
+    + `${esc(top.total_weight)} points across ${esc(top.target_count)} listed upgrades.`;
   const tbody = document.querySelector('#loot-priority tbody');
   LOOT.rankings.forEach((row,index)=>{
     const candidates = row.players.map(player=>{
       const items = player.targets.map(target=>`${esc(target.item_name)} <span class="muted">(${esc(target.slot)})</span>`).join(', ');
       return `<div><b>${esc(player.player)} (${esc(player.spec)})</b>: ${items}</div>`;
     }).join('');
-    const candidateDetails = `<details><summary>${row.target_count} targets for ${row.players.length} players</summary>${candidates}</details>`;
+    const candidateDetails = `<details><summary>${row.target_count} upgrades across ${row.players.length} players</summary>${candidates}</details>`;
     tbody.append(el(`<tr><td>${index+1}</td><td><b>${esc(row.dungeon)}</b></td>`
       + `<td>${esc(row.total_weight)}</td><td>${esc(row.target_count)}</td><td>${candidateDetails}</td></tr>`));
   });
@@ -1056,14 +1055,14 @@ const bsel = document.getElementById('fBrief');
 Object.keys(BRIEF).sort().forEach(dn=>bsel.append(el(`<option value="${esc(dn)}">${esc(dn)}</option>`)));
 function renderBriefing(){
   const b = BRIEF[bsel.value]; const box = document.getElementById('briefing'); box.innerHTML='';
-  if(!b){box.append(el('<div class="muted">No data.</div>'));return;}
+  if(!b){box.append(el('<div class="muted">No briefing is available for this dungeon.</div>'));return;}
   const keys=b.key_levels||[];
   const kr = keys.length? (keys.length===1?`+${keys[0]}`:`+${keys[0]}–+${keys[keys.length-1]}`):'?';
   // dungeon summary cards
   const avoidHere = rows.filter(x=>x.dungeon===bsel.value && !x.is_cascade && x.avoidable===true).length;
-  const bCards = [['Deaths', b.total_deaths], ['Wipes', b.wipes||0], ['Key levels', kr],
-    ['Avoidable', avoidHere]];
-  if(b.pulls) bCards.push(['CC-starved pulls', `${b.cc_starved_pulls}/${b.pulls}`]);  // hide degenerate 0/0
+  const bCards = [['Deaths', b.total_deaths], ['Wipes', b.wipes||0], ['Logged keys', kr],
+    ['Preventable', avoidHere]];
+  if(b.pulls) bCards.push(['Pulls short on stops', `${b.cc_starved_pulls}/${b.pulls}`]);  // hide degenerate 0/0
   const bcWrap = el('<div class="brief-cards"></div>');
   bCards.forEach(([l,n])=>bcWrap.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
   box.append(bcWrap);
@@ -1086,9 +1085,9 @@ function renderBriefing(){
   }
   if(!rt){ box.append(el('<div class="muted">No route data for this dungeon.</div>')); }
   if(rt){
-    box.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ On your route — stop targets (${rt.n_npcs} mobs, ${rt.pulls} pulls)</h3>`));
+    box.append(el(`<h3 class="muted" style="margin:6px 0 6px">🗺️ Route stop plan (${rt.n_npcs} mobs, ${rt.pulls} pulls)</h3>`));
     if(!rt.ok){ box.append(el(`<div class="muted">Route data unavailable: ${esc(rt.error||'?')}</div>`)); }
-    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No stoppable casters on the planned route.</div>')); }
+    else if(!(rt.kick_targets||[]).length && !(rt.stop_targets||[]).length){ box.append(el('<div class="muted">No interrupt or crowd-control targets were identified for this route.</div>')); }
     else{
       // One row per (mob, spell): Wowhead-linked ability, the damage-per-leaked-cast
       // severity signal (low-sample flagged + muted), and the corrected per-spell death
@@ -1097,11 +1096,11 @@ function renderBriefing(){
         if(!row.leak_n||!row.dmg_per_cast) return '<span class=muted>—</span>';
         const val=row.dmg_per_cast>=1000?`≈${Math.round(row.dmg_per_cast/1000)}k`:`≈${row.dmg_per_cast}`;
         return row.low_sample
-          ? `<span class="muted" title="only ${row.leak_n} leak — too few to rank">${val}/cast · low sample ×${row.leak_n}</span>`
+          ? `<span class="muted" title="only ${row.leak_n} logged cast${row.leak_n===1?'':'s'}; too little evidence to rank">${val}/cast · low sample ×${row.leak_n}</span>`
           : `${val}/cast <span class="muted">×${row.leak_n}</span>`;
       };
       const routeTbl=(rows)=>{
-        const t=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Dmg/cast</th><th>Killed us</th></tr></thead><tbody></tbody></table>');
+        const t=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Damage per cast</th><th>Deaths caused</th></tr></thead><tbody></tbody></table>');
         const tb=t.querySelector('tbody');
         rows.forEach(row=>tb.append(el(`<tr><td>${esc(row.mob)}</td>
           <td class="contrib">${(dangerSet.has(row.spell)?'💥 ':'')+spellLink(row.spell,row.id)}${row.cat?` <span class="muted">(${esc(row.cat)})</span>`:''}</td>
@@ -1110,11 +1109,11 @@ function renderBriefing(){
         return t;
       };
       if((rt.kick_targets||[]).length){
-        box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Kick (interruptible)</strong></div>'));
+        box.append(el('<div class="muted" style="margin:6px 0 2px"><strong>Interrupt these casts</strong></div>'));
         box.append(routeTbl(rt.kick_targets));
       }
       if((rt.stop_targets||[]).length){
-        box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Stun/CC (not kickable)</strong></div>'));
+        box.append(el('<div class="muted" style="margin:10px 0 2px"><strong>Use a stun or crowd control</strong></div>'));
         box.append(routeTbl(rt.stop_targets));
       }
     }
@@ -1138,15 +1137,15 @@ function renderBriefing(){
     const rowRoles=(tags)=>{const s=new Set();(tags||[]).forEach(t=>(GROLES[t]||['tank','healer','dps']).forEach(r=>s.add(r)));
       return s.size?s:new Set(['tank','healer','dps']);};
     const sorted=ga.slice().sort((x,y)=>prio(x)-prio(y));
-    const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full tracker ↗</a>`:'';
-    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Method.gg dungeon guide <span class="muted" style="font-weight:normal">· mechanics to watch for</span>${src}</h3>`));
+    const src=b.guide_url?` <a href="${esc(b.guide_url)}" target="_blank" rel="noopener" style="font-weight:normal">full guide ↗</a>`:'';
+    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">📖 Boss and trash mechanics <span class="muted" style="font-weight:normal">· Method.gg</span>${src}</h3>`));
     // Additive layer filter — interrupts are the default base layer; each role
     // toggle *adds* its mechanics on top. A row is visible if it's an interrupt
     // (when that layer is on) OR it belongs to an enabled role. All toggles are
     // independent: nothing is restrictive.
     const checked=new Set();           // role layers added on top (off by default)
     let interruptsOn=true;             // base layer: interrupt rows (on by default)
-    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show:</span></div>`);
+    const ctrl=el(`<div class="muted" style="display:flex;gap:14px;align-items:center;margin:0 0 6px;font-size:12px"><span>Show mechanics for:</span></div>`);
     const gtbl=el('<table><thead><tr><th>Mob</th><th>Ability</th><th>Watch for</th></tr></thead><tbody></tbody></table>');
     const gb=gtbl.querySelector('tbody');
     const trs=[];
@@ -1171,7 +1170,7 @@ function renderBriefing(){
       ctrl.append(wrap);
     });
     box.append(ctrl); box.append(gtbl);
-    const empty=el(`<div class="muted" style="font-size:11px;display:none">Nothing selected — tick a layer above to show mechanics.</div>`);
+    const empty=el(`<div class="muted" style="font-size:11px;display:none">Select at least one category to show mechanics.</div>`);
     box.append(empty);
     apply();
   }
@@ -1181,8 +1180,8 @@ function renderBriefing(){
   const nonstop=(b.threats||[]).filter(t=>
     (t.action==='Move'||t.action==='Defensive'||t.action==='Defensive / position') && t.spell!=='Melee');
   if(nonstop.length){
-    box.append(el('<h3 class="muted" style="margin:14px 0 6px">⚠️ Not stoppable — move out or pop a defensive</h3>'));
-    const tbl = el('<table><thead><tr><th>Do this</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Why / how</th></tr></thead><tbody></tbody></table>');
+    box.append(el('<h3 class="muted" style="margin:14px 0 6px">⚠️ Damage to avoid or mitigate</h3>'));
+    const tbl = el('<table><thead><tr><th>Response</th><th>Mob</th><th>Spell</th><th>Deaths</th><th>Reason</th></tr></thead><tbody></tbody></table>');
     const tb = tbl.querySelector('tbody');
     nonstop.slice(0,20).forEach(t=>{
       tb.append(el(`<tr><td><span class="pill ${actionCss[t.action]||'b-other'}">${actionIcon[t.action]||''} ${esc(t.action)}</span></td>
@@ -1221,7 +1220,7 @@ function renderBriefing(){
       const shown=list.slice(0,12);
       const more=list.length-shown.length;
       const hidden=showTb?0:tbCount;
-      h3.innerHTML=`💥 Most dangerous casts — these chunk or one-shot`
+      h3.innerHTML=`💥 Highest-damage casts`
         +(more>0?` <span class="muted" style="font-weight:normal">(top 12 of ${list.length})</span>`:'')
         +(hidden?` <span class="muted" style="font-weight:normal">· ${hidden} tank buster${hidden>1?'s':''} hidden</span>`:'')+src;
       db.innerHTML='';
@@ -1239,11 +1238,11 @@ function renderBriefing(){
     render();
   }
   if((b.fixate_mobs||[]).length){
-    box.append(el('<h3 class="muted" style="margin:16px 0 6px">⚡ Fixate mobs — peel/kite (ignores threat)</h3>'));
+    box.append(el('<h3 class="muted" style="margin:16px 0 6px">⚡ Fixate targets: peel or kite</h3>'));
     box.append(el(`<div class="contrib">${b.fixate_mobs.map(esc).join(' · ')}</div>`));
   }
   if((b.peel_mobs||[]).length){
-    box.append(el('<h3 class="muted" style="margin:16px 0 6px">🪓 Mobs that peel to squishies — grab early (threat)</h3>'));
+    box.append(el('<h3 class="muted" style="margin:16px 0 6px">🪓 Mobs that attacked non-tanks: pick them up quickly</h3>'));
     const pmx=Math.max(...b.peel_mobs.map(a=>a[1]));
     b.peel_mobs.forEach(([m,n])=>box.append(el(`<div class="bar"><span>${esc(m)}</span>
       <span class="track"><span class="fill" style="width:${100*n/pmx}%"></span></span><span>${n}</span></div>`)));
@@ -1263,7 +1262,7 @@ function renderOffroute(){
   const b = BRIEF[osel.value]; const rt = b && b.route;
   const offRoute = (rt && rt.off_route_mobs) || [];
   if(!offRoute.length){
-    box.append(el('<div class="muted">No off-route mobs recorded for this dungeon — every pulled mob was on the planned route.</div>'));
+    box.append(el('<div class="muted">No extra mobs were recorded for this dungeon; every pulled mob was on the planned route.</div>'));
     return;
   }
   // Aggregate per mob: pulls it showed in + the snapped keystone pack/floor.
@@ -1276,13 +1275,13 @@ function renderOffroute(){
   const sorted = Object.entries(mobInfo).sort((a,b)=>b[1].pulls.length - a[1].pulls.length);
   const m = rt.offroute_map;
   if(m && m.floors && m.floors.length){
-    box.append(el('<div class="contrib" style="margin:-2px 0 8px">Overpulled mobs pinned onto the keystone.guru map (from your combat log). '
+    box.append(el('<div class="contrib" style="margin:-2px 0 8px">Extra mobs are pinned to the keystone.guru map from the combat log. '
       +'<span style="color:#ff3030">●</span> keystone pack · <span style="color:#ff9c2f">◌</span> approximate (not on keystone map) · '
       +'<span style="color:#4caf50">●</span> your route · <span style="color:#8a8a8a">●</span> skipped packs.</div>'));
     m.floors.forEach(f => box.append(el(offrouteFloorSvg(f))));
   }
   // Which pack list (keystone-snapped) + spawned adds with no map location.
-  const otbl=el('<table><thead><tr><th>Mob</th><th>Pull #(s)</th><th>Where</th><th>Wowhead</th></tr></thead><tbody></tbody></table>');
+  const otbl=el('<table><thead><tr><th>Mob</th><th>Pulls</th><th>Map location</th><th>Reference</th></tr></thead><tbody></tbody></table>');
   const ob=otbl.querySelector('tbody');
   sorted.forEach(([mob, info])=>{
     const pullNums = info.pulls.length ? info.pulls.map(p=>`#${p}`).join(', ') : '<span class="muted">log</span>';
@@ -1319,17 +1318,17 @@ Object.entries(S.bucket_breakdown).sort((a,b)=>b[1]-a[1]).forEach(([k,v])=>{
 
 // cc mobs
 function mobList(title,arr){const d=el(`<div><h3 class="muted" style="margin:0 0 6px">${title}</h3></div>`);
-  if(!arr.length){d.append(el(`<div class="muted">— none —</div>`));return d;}
+  if(!arr.length){d.append(el(`<div class="muted">None recorded.</div>`));return d;}
   const mx=Math.max(...arr.map(a=>a[1]));
   arr.forEach(([m,c])=>d.append(el(`<div class="bar"><span>${esc(m)}</span>
     <span class="track"><span class="fill" style="width:${100*c/mx}%"></span></span><span>${c}</span></div>`)));
   return d;}
 document.getElementById('ccmobs').append(
-  mobList("Needed an interrupt",S.interrupt_mobs), mobList("Needed a stun",S.stun_mobs));
+  mobList("Deaths preventable by interrupt",S.interrupt_mobs), mobList("Deaths preventable by stun or crowd control",S.stun_mobs));
 
 // leaked interruptible casts (pull-level)
 (function(){const arr=S.top_leaked_casts||[];const c=document.getElementById('leaked');
-  if(!arr.length){c.append(el('<div class="muted">— none —</div>'));return;}
+  if(!arr.length){c.append(el('<div class="muted">None recorded.</div>'));return;}
   const mx=Math.max(...arr.map(a=>a[1]));
   arr.forEach(([m,n])=>c.append(el(`<div class="bar"><span>${esc(m)}</span>
     <span class="track"><span class="fill" style="width:${100*n/mx}%"></span></span><span>${n}</span></div>`)));})();
@@ -1367,26 +1366,26 @@ function render(){
     const av=d.avoidable===true?'<span class="av-yes">yes</span>':
              d.avoidable===false?'<span class="av-no">no</span>':'<span class="av-null">?</span>';
     const hv=d.healer.verdict;
-    const healMap={could_heal_more:['heal more','av-yes'],"healer_cc'd":['healer CC’d','lever'],
-                   healer_oom:['healer OOM','lever'],unhealable_oneshot:['1-shot','muted'],
-                   stop_not_heal:['not on healer','muted'],
-                   kept_up:['kept up','muted'],unknown:['?','muted']};
+    const healMap={could_heal_more:['more healing possible','av-yes'],"healer_cc'd":['healer controlled','lever'],
+                   healer_oom:['out of mana','lever'],unhealable_oneshot:['one-shot','muted'],
+                   stop_not_heal:['not a healing issue','muted'],
+                   kept_up:['healing covered','muted'],unknown:['unknown','muted']};
     const hm=healMap[hv]||[hv,'muted'];
     const heal=`<span class="${hm[1]}" title="${esc(d.healer.detail||'')}">${esc(hm[0])}</span>`;
     const dv=d.defensives||{};
     const def=(dv.would_have_saved&&dv.would_have_saved.length)
         ?`<span class="av-yes" title="big, predictable hit (channel/DoT/known mechanic) — this defensive was off cooldown and covers the lethal margin">${esc(dv.would_have_saved.join(', '))}</span>`
         :(dv.available&&dv.available.length)
-        ?`<span class="muted" title="off cooldown but mitigation may not have covered it">had: ${esc(dv.available.join(', '))}</span>`
-        :'<span class="muted">none up</span>';
+        ?`<span class="muted" title="off cooldown but mitigation may not have covered it">Available: ${esc(dv.available.join(', '))}</span>`
+        :'<span class="muted">None available</span>';
     const wclUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(d.report)}`;
     tb.append(el(`<tr><td><a href="${wclUrl}" target="_blank" rel="noopener" title="Open on WCL">${esc(d.dungeon)} +${d.key}</a></td><td>${esc(d.player)}</td><td>${esc(d.role)}</td>
       <td>${d.time_in_fight_s}</td><td>${esc(d.killer)}${d.dangerous_cast?` <span class="av-yes" title="died to a flagged high-damage cast: ${esc(d.dangerous_cast)}">💥</span>`:''}</td>
-      <td><span class="pill ${cls}">${esc(lbl)}</span>${d.one_shot?' <span class="muted">1-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑trigger</span>':''}${d.is_cascade?' <span class="muted">cascade</span>':''}</td>
+      <td><span class="pill ${cls}">${esc(lbl)}</span>${d.one_shot?' <span class="muted">one-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑ wipe trigger</span>':''}${d.is_cascade?' <span class="muted">follow-on</span>':''}</td>
       <td>${av}</td><td>${d.confidence}</td><td class="contrib">${contrib||'<span class=muted>—</span>'}</td>
       <td>${heal}</td><td class="contrib">${def}</td></tr>`));
   });
-  document.getElementById('foot').textContent=`${r.length} death(s) shown of ${rows.length}.`;
+  document.getElementById('foot').textContent=`Death log: showing ${r.length} of ${plural(rows.length,'death')}.`;
 }
 document.querySelectorAll('#deaths th[data-k]').forEach(th=>th.onclick=()=>{
   const k=th.dataset.k; sortDir=(sortK===k)?-sortDir:1; sortK=k; render();});
@@ -1421,7 +1420,7 @@ render();
   }
   const debriefRuns = RUNS.map((r,i)=>({r,i})).filter(x=>x.r.timing && Object.keys(x.r.timing).length);
   if(!debriefRuns.length){
-    document.getElementById('run-debrief').innerHTML='<div class="muted">No run timing data — re-run the analysis.</div>';
+    document.getElementById('run-debrief').innerHTML='<div class="muted">No timing data is available for these runs.</div>';
     rsel.style.display='none'; return;
   }
   debriefRuns.forEach(({r,i})=>{
@@ -1436,7 +1435,7 @@ render();
     // A: where the time went
     const marginTxt = t.timer_s ? fmtMargin(t.margin_s) : 'no timer';
     const mClass = !t.timer_s?'muted':t.margin_s<0?'av-yes':t.margin_s<120?'lever':'av-no';
-    box.append(el('<h3 class="muted" style="margin:6px 0 6px">⏱️ Where the time went</h3>'));
+    box.append(el('<h3 class="muted" style="margin:6px 0 6px">⏱️ Run timing</h3>'));
     const cards = [['Duration', fmtMin(t.run_duration_s)], ['Timer', t.timer_s?fmtMin(t.timer_s):'—'],
       ['Margin', `<span class="${mClass}">${marginTxt}</span>`],
       ['Downtime', `${Math.round(t.downtime_s)}s (${t.downtime_pct}%)`],
@@ -1469,7 +1468,7 @@ render();
     {
       const total=Math.max(1,t.run_duration_s||0), comb=Math.max(0,t.combat_s||0),
             rec=Math.max(0,t.recovery_s||0), travel=Math.max(0,(t.downtime_s||0)-rec);
-      box.append(el('<h3 class="muted" style="margin:16px 0 6px">⏱️ Downtime &amp; clear pace</h3>'));
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">⏱️ Combat and downtime</h3>'));
       const seg=(secs,col,lab)=> secs>0?`<span title="${lab}: ${fmtMin(secs)} (${Math.round(100*secs/total)}%)" style="flex:0 0 ${100*secs/total}%;background:${col}"></span>`:'';
       box.append(el(`<div style="display:flex;height:18px;border:1px solid var(--line);border-radius:5px;overflow:hidden;max-width:760px">`
         +seg(comb,'var(--accent)','combat')+seg(travel,'var(--warn)','travel / idle downtime')+seg(rec,'var(--bad)','wipe recovery')+`</div>`));
@@ -1480,7 +1479,7 @@ render();
         box.append(el(`<div class="contrib" style="margin-top:6px">Clear time <b>${fmtMin(our)}</b> vs +${r.key_level} field median <b>${fmtMin(med)}</b> (fastest 25%: ${fmtMin(fast)}, n=${pace.dur_n}) — `
           +`${pctSpan(pct,'field median clear time ÷ our clear time — >100% = faster than the field median')} of field-median pace</span> `
           +`<span class="muted">(${our<=med?fmtMin(med-our)+' faster':fmtMin(our-med)+' slower'})</span>.</div>`));
-        box.append(el(`<div class="contrib muted" style="font-size:11px">WCL exposes only total clear time for the field, not its downtime — so this is total pace (combat + downtime), not downtime alone.</div>`));
+        box.append(el(`<div class="contrib muted" style="font-size:11px">The field comparison uses total clear time because separate downtime is not available for public logs.</div>`));
       }
     }
 
@@ -1496,15 +1495,15 @@ render();
       const roleTag = n => dps[n].role==='tank'?' 🛡️':dps[n].role==='healer'?' 💚':'';
       const actTitle = a => `actual ${Math.round(a.run_dps).toLocaleString()} run-DPS · ${Math.round(a.active_dps).toLocaleString()} active-DPS`;
       if(!haveSim){
-        box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 DPS</h3>'));
-        box.append(el('<div class="contrib">Run the <code>simc</code> command to overlay each player&#39;s simmed ceiling, the top-+'+kl+' benchmark, and the gap%.</div>'));
+        box.append(el('<h3 class="muted" style="margin:16px 0 6px">🎯 Damage by player</h3>'));
+        box.append(el('<div class="contrib">Simulation and field benchmarks are not available for this run. Bars show recorded run DPS.</div>'));
         let mx=1; ordered.forEach(n=>{ mx=Math.max(mx, dps[n].run_dps); });
         ordered.forEach(n=>{ const a=dps[n]; const actW=Math.round(100*a.run_dps/mx);
           box.append(el(`<div class="gapbar"><span>${esc(n)}${roleTag(n)}</span>
             <span class="track"><span class="act" style="width:${actW}%" title="${actTitle(a)}"></span></span>
             <span class="muted" style="font-size:12px">${Math.round(a.run_dps/1000)}k</span></div>`)); });
       } else {
-        box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS — actual vs the +${kl} field &amp; your SimC ceiling</h3>`));
+        box.append(el(`<h3 class="muted" style="margin:16px 0 6px">🎯 DPS compared with +${kl} logs and simulation</h3>`));
         // Sort by the typical (p90) +kl field benchmark (descending), not actual run-DPS.
         const ordTyp = names.slice().sort((a,b)=>((field[b]||{}).top12_typical||0)-((field[a]||{}).top12_typical||0));
         let mx=1; ordTyp.forEach(n=>{ const f=field[n]||{}, s=sims[n]||{}; mx=Math.max(mx, dps[n].run_dps, f.top12_typical||0, s.dps||0, s.bis_dps||0); });
@@ -1579,7 +1578,7 @@ render();
       const hfield = (fieldLookup[dnorm(r.dungeon)]||{})[String(hkl)] || {};   // this run's key
       const hord = hnames.slice().sort((a,b)=>hps[b].run_hps-hps[a].run_hps);
       const hRoleTag = n => hps[n].role==='tank'?' 🛡️':hps[n].role==='healer'?' 💚':'';
-      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">💚 HPS — healing vs the median (p50) +${hkl} healer/tank</h3>`));
+      box.append(el(`<h3 class="muted" style="margin:16px 0 6px">💚 Healing compared with median +${hkl} logs</h3>`));
       let mxH=1; hord.forEach(n=>{ const s=hfield[n]||{}; mxH=Math.max(mxH, hps[n].run_hps, s.hps_typical||0); });
       let anyBench=false;
       hord.forEach(n=>{
@@ -1603,7 +1602,7 @@ render();
     // C: cooldown economy
     const ce = r.cd_economy||{};
     if((ce.players||[]).length){
-      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🧊 Cooldown economy — used vs available</h3>'));
+      box.append(el('<h3 class="muted" style="margin:16px 0 6px">🧊 Cooldown use</h3>'));
       const grid = el('<div class="cde"></div>');
       // Status for one offensive CD. Long burst CDs get a timestamp-based "missed uses"
       // estimate (how many more fit on cooldown); short resource-gated ones keep the
@@ -1641,20 +1640,20 @@ render();
         if(p.offensive.length) h += `<table class="kv"><thead><tr><th>Offensive CD</th><th>cadence</th><th></th></tr></thead><tbody>${cdRows(p.offensive)}</tbody></table>`;
         if(p.defensive.length) h += `<table class="kv" style="margin-top:6px"><thead><tr><th>Defensive used</th><th>×</th></tr></thead><tbody>${defRows(p.defensive)}</tbody></table>`;
         if(p.def_rarely) h += `<div class="contrib" style="margin-top:4px"><span class="low">⚠ rarely presses defensives</span> — ${p.def_total}× all run (${p.def_per_min}/min). Reactive mitigation is sitting on the bar; pressing it on dangerous casts eases the healer.</div>`;
-        if(p.deaths_def_available_unused) h += `<div class="contrib" style="margin-top:4px"><span class="av-yes">${p.deaths_def_available_unused}</span> death(s) with a defensive up &amp; unused${p.deaths_def_would_save?` (${p.deaths_def_would_save} would have saved)`:''}.</div>`;
+        if(p.deaths_def_available_unused) h += `<div class="contrib" style="margin-top:4px"><span class="av-yes">${p.deaths_def_available_unused}</span> ${p.deaths_def_available_unused===1?'death':'deaths'} with a defensive available but unused${p.deaths_def_would_save?` (${p.deaths_def_would_save} could have been prevented)`:''}.</div>`;
         grid.append(el(h+'</div>'));
       });
       box.append(grid);
       if(ce.players.some(p=>(p.offensive||[]).some(c=>c.warn)))
-        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> (offensive) = a burst cooldown the player <i>has</i> — confirmed from their talents where WCL provides them, else a known baseline burst for the spec — yet never cast, or cast far below the cadence its cooldown allows, over the run. A CD whose talent the player didn&#39;t take shows the neutral &ldquo;not talented&rdquo; and is never flagged.</div>'));
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> marks a known burst cooldown that was unused or far below its available cadence. Optional talents that were not taken are not flagged.</div>'));
       if(ce.players.some(p=>(p.defensive||[]).some(c=>c.ignored)))
-        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> = a regularly-usable defensive (short cooldown, not an emergency button) pressed far below the cadence its cooldown allows over the run — it looks ignored (e.g. a rogue never weaving Feint). Long-CD emergency saves and the Healthstone consumable are exempt; tanks are graded by active mitigation instead.</div>'));
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>⚠ never/rarely pressed</b> marks a short, repeatable defensive used far below its available cadence. Emergency cooldowns and Healthstones are excluded.</div>'));
       if(ce.players.some(p=>(p.offensive||[]).some(c=>c.track_missed)))
-        box.append(el('<div class="contrib" style="margin-top:6px"><b>≈ missed</b> = uses left on the table for long burst CDs, from actual cast timing: ready at the pull, locked for its base CD after each cast, the rest is idle-while-ready ÷ CD. Cooldowns recover between pulls, so it&#39;s wall-clock; downtime is counted, making it an opportunity ceiling, not strict waste. Hover for the idle breakdown.</div>'));
+        box.append(el('<div class="contrib" style="margin-top:6px"><b>≈ missed</b> estimates additional long-cooldown uses that fit into the run. Downtime counts, so treat it as opportunity rather than strict waste. Hover for timing details.</div>'));
       const ex = ce.externals||{};
       if((ex.given||[]).length){
-        box.append(el('<h3 class="muted" style="margin:14px 0 6px">🤝 External defensives (who → whom)</h3>'));
-        const etbl = el('<table><thead><tr><th>Caster</th><th>On</th><th>Ability</th><th>×</th></tr></thead><tbody></tbody></table>');
+        box.append(el('<h3 class="muted" style="margin:14px 0 6px">🤝 External defensives</h3>'));
+        const etbl = el('<table><thead><tr><th>Caster</th><th>Target</th><th>Ability</th><th>Uses</th></tr></thead><tbody></tbody></table>');
         const eb = etbl.querySelector('tbody');
         ex.given.forEach(g=>eb.append(el(`<tr><td>${esc(g.caster)}</td><td>${esc(g.recipient)}</td><td>${esc(g.ability)}</td><td>${g.count}</td></tr>`)));
         box.append(etbl);
@@ -1730,16 +1729,16 @@ Object.keys(routeAnalyses).sort().forEach(d=>rsel.append(el(`<option value="${es
 function renderRoute(){
   const ra = routeAnalyses[rsel.value];
   const box = document.getElementById('route-analysis'); box.innerHTML='';
-  if(!ra||ra.error){box.append(el(`<div class="muted">${esc(ra?.error||'No data')}</div>`));return;}
+  if(!ra||ra.error){box.append(el(`<div class="muted">${esc(ra?.error||'No route analysis is available.')}</div>`));return;}
 
   // Timer summary
   const t=ra.timer||{};
   const mClass = t.margin_s<0?'av-yes':t.margin_s<120?'lever':'av-no';
   const fmtMin = (s)=>`${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,'0')}`;
   box.append(el(`<div class="verdict">
-    <b>Timer:</b> <span class="${mClass}">${fmtMargin(t.margin_s)} margin</span>
-    (est. clear ${fmtMin(t.estimated_clear_s)} / ${fmtMin(t.timer_s)} timer)
-    · <b>${t.death_budget}</b> deaths allowed (${t.death_penalty_s||15}s each)
+    <b>Estimated route time:</b> <span class="${mClass}">${fmtMargin(t.margin_s)} margin</span>
+    (${fmtMin(t.estimated_clear_s)} clear / ${fmtMin(t.timer_s)} timer)
+    · <b>${t.death_budget}</b> death allowance before overtime (${t.death_penalty_s||15}s each)
     · group DPS: ${Math.round(t.group_dps_needed||0).toLocaleString()}
     <div class="contrib" style="margin-top:4px">Clear estimate uses full enemy HP
       (un-scaled from the ${ra.export_share_pct||25}% export share) at
@@ -1754,9 +1753,9 @@ function renderRoute(){
   const lustByPull = {};
   lustIssues.forEach(i=>{ if(i.pull_num!=null){(lustByPull[i.pull_num]=lustByPull[i.pull_num]||[]).push(i);} });
   const lusts = ra.lusts_in_route||[];
-  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🔥 Bloodlust in this route</h3>'));
+  box.append(el('<h3 class="muted" style="margin:14px 0 6px">🔥 Bloodlust plan</h3>'));
   if(lusts.length){
-    const ltbl=el('<table><thead><tr><th>Pull</th><th>~When</th><th>What</th><th>Verdict</th></tr></thead><tbody></tbody></table>');
+    const ltbl=el('<table><thead><tr><th>Pull</th><th>Estimated time</th><th>Target</th><th>Assessment</th></tr></thead><tbody></tbody></table>');
     const lb=ltbl.querySelector('tbody');
     lusts.forEach(l=>{
       const probs=lustByPull[l.pull_num]||[];
@@ -1769,7 +1768,7 @@ function renderRoute(){
     });
     box.append(ltbl);
   } else {
-    box.append(el('<div class="muted">No bloodlust assigned in this route.</div>'));
+    box.append(el('<div class="muted">This route has no Bloodlust assignment.</div>'));
   }
   // Route-level lust notes with no specific pull (unused slots, none-assigned, …).
   lustIssues.filter(i=>i.pull_num==null).forEach(i=>{
@@ -1778,7 +1777,7 @@ function renderRoute(){
   });
 
   // Pull timeline bar chart
-  box.append(el('<h3 class="muted" style="margin:14px 0 6px">📊 Pull health timeline</h3>'));
+  box.append(el('<h3 class="muted" style="margin:14px 0 6px">📊 Estimated pull size and duration</h3>'));
   const pulls = ra.pulls||[];
   const maxHp = Math.max(1,...pulls.map(p=>p.total_health));
   pulls.forEach(p=>{
@@ -1797,11 +1796,13 @@ function renderRoute(){
   if(issues.length){
     const nc=issues.filter(i=>i.severity==='critical').length;
     const nw=issues.filter(i=>i.severity==='warning').length;
-    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">⚠️ Issues & recommendations (${nc} critical, ${nw} warnings)</h3>`));
+    box.append(el(`<h3 class="muted" style="margin:14px 0 6px">⚠️ Route recommendations (${nc} critical, ${nw} warnings)</h3>`));
+    const issueLabels={cooldown_alignment:'cooldowns',pull_size:'pull size',mana:'mana',
+      timer:'timer',travel:'travel',route:'route'};
     issues.forEach(i=>{
       const sc = i.severity==='critical'?'sev-critical':i.severity==='warning'?'sev-warning':'sev-info';
       const pullTag = i.pull_num?` <span class="muted">(pull ${i.pull_num})</span>`:'';
-      box.append(el(`<div style="margin:4px 0"><span class="issue-cat">${esc(i.category)}</span>
+      box.append(el(`<div style="margin:4px 0"><span class="issue-cat">${esc(issueLabels[i.category]||String(i.category||'note').replaceAll('_',' '))}</span>
         <span class="${sc}">${esc(i.message)}</span>${pullTag}
         <div class="contrib" style="margin-left:60px">${esc(i.detail)}</div></div>`));
     });
@@ -1854,7 +1855,7 @@ if(Object.keys(routeAnalyses).length) renderRoute();
         <td>+${r.key_level}</td><td>${result}</td><td>${t.deaths||0}</td>
         <td>${t.downtime_pct!=null?t.downtime_pct+'%':'—'}</td>
         <td>${d.group_dps?Math.round(d.group_dps/1000)+'k':'—'}</td>
-        <td>${d.new_best?'<span class="ok-use" title="set a new record for this dungeon — highest key, then best timed result — vs earlier runs">🌟 new best</span>':'<span class="muted">—</span>'}</td></tr>`));
+        <td>${d.new_best?'<span class="ok-use" title="Best result so far for this dungeon, ranked by key level and then timer margin">🌟 new best</span>':'<span class="muted">—</span>'}</td></tr>`));
     });
   }
   document.querySelectorAll('#progression th[data-k]').forEach(th=>th.onclick=()=>{
@@ -1863,7 +1864,7 @@ if(Object.keys(routeAnalyses).length) renderRoute();
   let timed=0, withTimer=0, totalDeaths=0;
   data.forEach(d=>{const t=d._t; if(t.timer_s){withTimer++; if(t.on_time)timed++;} totalDeaths+=t.deaths||0;});
   const cards = [['Runs', data.length], ['Timed', withTimer?`${timed}/${withTimer}`:'—'],
-    ['Total deaths', totalDeaths], ['Avg deaths/run', data.length?(totalDeaths/data.length).toFixed(1):'—']];
+    ['Total deaths', totalDeaths], ['Deaths per run', data.length?(totalDeaths/data.length).toFixed(1):'—']];
   const cw = document.getElementById('prog-cards');
   cards.forEach(([l,n])=>cw.append(el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
 })();

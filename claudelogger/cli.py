@@ -687,7 +687,7 @@ def cmd_loot(args) -> int:
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     print(f"Loot priority — {catalog['season']} ({catalog['game_version']}; "
-          "DPS x1.5, weapons x0.25)")
+          "DPS x1.5, weapon baseline 0.25)")
     for index, row in enumerate(rankings, start=1):
         print(f"{index}. {row['dungeon']} — {row['total_weight']:g} remaining weight")
         for player in row["players"]:
