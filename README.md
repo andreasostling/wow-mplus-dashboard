@@ -76,8 +76,9 @@ python -m claudelogger loot --owned owned-loot.json --json
 
 `loot` ranks the active MID2 dungeon pool using the guide-listed upgrades in
 `data/loot-priorities.json`; these are candidates to consider, not unconditional BiS.
-Each unresolved weapon or trinket scores 3, neck/ring/off-hand scores 2, and armor
-scores 1. DPS targets receive a 1.5x role multiplier; tank and healer targets remain at
+Each unresolved weapon or trinket starts at 3, neck/ring/off-hand at 2, and armor
+at 1. Weapon targets receive a 0.25x multiplier because the group is crafting weapons.
+DPS targets then receive a 1.5x role multiplier; tank and healer targets remain at
 1x. The generated GitHub Pages dashboard displays the current team ranking above the
 pre-run briefing. Item IDs and boss drops are deliberately left unresolved until verified from
 a live game item API, so the catalog uses stable target IDs for ownership tracking.
@@ -107,8 +108,9 @@ Outputs land in `out/`:
 
 Briefings are enriched with the mobs on your **planned route**, so they warn about
 dangerous casters you're *about* to pull — even in a dungeon you've never logged.
-Route short-codes live in `keystone.py:DEFAULT_ROUTES` and can be overridden by a
-`routes.json` at the repo root (`{"Dungeon Name": "shortCode"}`). For each route we
+The active route short-codes live in `routes.json` at the repo root
+(`{"Dungeon Name": "shortCode"}`), with `keystone.py:DEFAULT_ROUTES` available only as
+an optional code-level fallback. For each route we
 fetch the public keystone.guru page (browser headers required — Cloudflare 403s a bare
 client), resolve its pulls' `enemy_id → npc_id`, and cross-reference MDT to list which
 route mobs have interruptible casts or stun/CC-category casts (from the mplus-interrupts

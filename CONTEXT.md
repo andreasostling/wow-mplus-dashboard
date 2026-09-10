@@ -13,8 +13,9 @@
 This is the authoritative current roster. Earlier compositions and aliases are superseded unless a task explicitly cites them as historical log evidence.
 
 The current game context is World of Warcraft: Midnight, Season 2. The active Mythic+
-loot pool is maintained in `data/loot-priorities.json`; the route and SimC fixtures still
-contain Season 1 history until replacement Season 2 routes are exported and verified.
+loot pool is maintained in `data/loot-priorities.json`, and the eight live routes are in
+`routes.json`. The route SimC fixtures remain Season 1 history until replacement Season 2
+exports are added.
 
 ## Glossary
 

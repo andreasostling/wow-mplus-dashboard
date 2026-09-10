@@ -9,6 +9,7 @@ the season roll-up — using synthetic events, so they run with no network/cache
 """
 from __future__ import annotations
 
+import json
 import unittest
 
 from claudelogger import classify, knowledge, mdt, pulls, report, keystone, cd_economy, mapviz
@@ -16,7 +17,7 @@ from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
 )
-from claudelogger.config import ACTIVE_ROSTER, Knobs, ROSTER
+from claudelogger.config import ACTIVE_ROSTER, BOSS_GUIDES, DUNGEON_SLUGS, Knobs, REPO_ROOT, ROSTER
 from claudelogger.fetch import Actor, Fight, FightEvents, ReportData
 
 
@@ -58,6 +59,17 @@ class TestActiveRoster(unittest.TestCase):
             "Stickerduva": ("Rogue", "Subtlety", "dps"),
         })
         self.assertEqual(ROSTER, frozenset(ACTIVE_ROSTER))
+
+    def test_mid2_routes_and_boss_guides_cover_active_pool(self):
+        routes = json.loads((REPO_ROOT / "routes.json").read_text(encoding="utf-8"))
+        self.assertEqual(routes, {
+            "Altar of Fangs": "xwt8Pza", "Den of Nalorakk": "r9yP5t2",
+            "Murder Row": "XsdAG1V", "The Blinding Vale": "oXwdXdU",
+            "Voidscar Arena": "LHXRfPr", "Ruby Life Pools": "Xnxx3lT",
+            "King's Rest": "eMIO4TP", "Temple of Sethraliss": "TNN97kq",
+        })
+        self.assertEqual(set(routes), set(DUNGEON_SLUGS))
+        self.assertEqual(set(BOSS_GUIDES), set(DUNGEON_SLUGS))
 
 
 # --------------------------------------------------------------------------

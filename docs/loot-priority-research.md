@@ -6,7 +6,7 @@ Current as of **2026-09-10**. This is the active MID2 result.
 
 MID2's pool is **Altar of Fangs, The Blinding Vale, Den of Nalorakk, Murder Row, Voidscar Arena, Temple of Sethraliss, King's Rest, Ruby Life Pools**. Current S2 class guides describe the four-new/four-legacy rotation and list dungeon targets: [Protection](https://www.wowhead.com/guide/classes/paladin/protection/mythic-plus-dungeon-tips), [Arcane](https://www.wowhead.com/guide/classes/mage/arcane/mythic-plus-dungeon-tips), [Restoration Shaman](https://www.wowhead.com/guide/classes/shaman/restoration/mythic-plus-dungeon-tips), [Devastation](https://www.wowhead.com/guide/classes/evoker/devastation/mythic-plus-dungeon-tips), [Subtlety](https://www.wowhead.com/guide/classes/rogue/subtlety/mythic-plus-dungeon-tips).
 
-Wowhead describes these as pieces to consider and says they may not be fully BiS. Weight weapons/trinkets **3**, neck/ring/off-hand **2**, armor **1**, then multiply DPS players' target scores by **1.5**; tank and healer targets remain at **1x**. Score a dungeon by the sum of *unresolved* weighted targets. Dungeon, slot, and item names are high confidence. Relative strength is medium confidence. `item_id` and `boss` remain null until confirmed from a live game item API—never guess encounter data from an older table.
+Wowhead describes these as pieces to consider and says they may not be fully BiS. Start weapons/trinkets at **3**, neck/ring/off-hand at **2**, and armor at **1**. Multiply weapon targets by **0.25** because the group is crafting weapons, then multiply DPS players' scores by **1.5**; tank and healer targets remain at **1x**. Score a dungeon by the sum of *unresolved* weighted targets. Dungeon, slot, and item names are high confidence. Relative strength is medium confidence. `item_id` and `boss` remain null until confirmed from a live game item API—never guess encounter data from an older table.
 
 ## Current implementation target table
 
@@ -62,33 +62,34 @@ Wowhead describes these as pieces to consider and says they may not be fully BiS
 
 | Priority | Dungeon | score | target count | reason |
 |---:|---|---:|---:|---|
-| 1 | Altar of Fangs | 27.5 | 8 | two DPS weapon targets, Cybop trinket, three Evoker upgrades |
+| 1 | Altar of Fangs | 20.75 | 8 | Cybop and Neutronflux trinkets plus three Evoker upgrades |
 | 2 | Murder Row | 20.5 | 7 | Arcane/Evoker trinkets plus Rogue jewelry |
-| 3 | King's Rest | 18.5 | 6 | Evoker/Rogue weapons, Arcane off-hand, and Konstanten trinket |
-| 4 | Temple of Sethraliss | 16.5 | 8 | Arcane weapon and wide armor cleanup |
-| 5 | The Blinding Vale | 16.5 | 7 | Arcane trinket, Konstanten shield, and Rogue weapon |
-| 6 | Voidscar Arena | 15.5 | 5 | Cybop weapon, Evoker trinket, three ring/neck targets |
-| 7 | Ruby Life Pools | 14 | 7 | Neutronflux off-hand, Stickerduva weapon, and armor cleanup |
+| 3 | Voidscar Arena | 13.25 | 5 | Evoker trinket and three ring/neck targets; Cybop's weapon is downweighted |
+| 4 | Temple of Sethraliss | 13.125 | 8 | wide armor and jewelry coverage plus a downweighted Arcane weapon |
+| 5 | The Blinding Vale | 13.125 | 7 | Arcane trinket, Konstanten shield, and armor cleanup |
+| 6 | King's Rest | 11.75 | 6 | Arcane off-hand and Konstanten trinket; two weapons are downweighted |
+| 7 | Ruby Life Pools | 10.625 | 7 | Neutronflux off-hand and armor cleanup; Stickerduva's weapon is downweighted |
 | 8 | Den of Nalorakk | 10 | 5 | Cybop neck, Konstanten ring, Gaddini ring |
 
 ```yaml
 season: MID2
 status: active_as_of_2026-09-10
-score_rule: sum(unresolved_target.weight * role_multiplier)
+score_rule: sum(unresolved_target.weight * slot_multiplier * role_multiplier)
 role_multipliers: {dps: 1.5, tank: 1.0, healer: 1.0}
+slot_multipliers: {weapon: 0.25, default: 1.0}
 catalog_target_count: 53
 priority:
-  - {dungeon: Altar of Fangs, score: 27.5, targets: 8}
+  - {dungeon: Altar of Fangs, score: 20.75, targets: 8}
   - {dungeon: Murder Row, score: 20.5, targets: 7}
-  - {dungeon: King's Rest, score: 18.5, targets: 6}
-  - {dungeon: Temple of Sethraliss, score: 16.5, targets: 8}
-  - {dungeon: The Blinding Vale, score: 16.5, targets: 7}
-  - {dungeon: Voidscar Arena, score: 15.5, targets: 5}
-  - {dungeon: Ruby Life Pools, score: 14, targets: 7}
+  - {dungeon: Voidscar Arena, score: 13.25, targets: 5}
+  - {dungeon: Temple of Sethraliss, score: 13.125, targets: 8}
+  - {dungeon: The Blinding Vale, score: 13.125, targets: 7}
+  - {dungeon: King's Rest, score: 11.75, targets: 6}
+  - {dungeon: Ruby Life Pools, score: 10.625, targets: 7}
   - {dungeon: Den of Nalorakk, score: 10, targets: 5}
 ```
 
-Ties sort by higher target count, then dungeon name; therefore Temple of Sethraliss precedes The Blinding Vale, which precedes Voidscar Arena. Raid, crafted, tier/catalyst, Delve, and Vault-only gear deliberately does not affect a key choice. Recalculate after each meaningful upgrade; item level/track, sockets, current equipment, talents, and tuning can overturn the fresh-roster default.
+Ties sort by higher target count, then dungeon name; therefore Temple of Sethraliss precedes The Blinding Vale. Raid, crafted, tier/catalyst, Delve, and Vault-only gear deliberately does not affect a key choice. Recalculate after each meaningful upgrade; item level/track, sockets, current equipment, talents, and tuning can overturn the fresh-roster default.
 
 ## MID1 migration note
 

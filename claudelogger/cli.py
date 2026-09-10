@@ -67,7 +67,10 @@ def build_route_info(client: WCLClient, cfg: Config, runs: list[dict],
 
     info: list[dict] = []
     for r in routes:
-        entry = {"display": r.get("dungeon", r["label"]), "norm": _norm(r.get("dungeon", r["label"])),
+        # Keep the configured label as the dashboard's canonical display name. Route
+        # slugs omit punctuation and title-case small words ("Kings Rest", "Altar Of
+        # Fangs"), while routes.json carries the intended names used everywhere else.
+        entry = {"display": r["label"], "norm": _norm(r["label"]),
                  "label": r["label"], "code": r["code"], "ok": r.get("ok", False),
                  "error": r.get("error", ""), "pulls": r.get("pulls", 0),
                  "threats": [], "stop_threats": []}
@@ -683,7 +686,8 @@ def cmd_loot(args) -> int:
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
-    print(f"Loot priority — {catalog['season']} ({catalog['game_version']}; DPS score x1.5)")
+    print(f"Loot priority — {catalog['season']} ({catalog['game_version']}; "
+          "DPS x1.5, weapons x0.25)")
     for index, row in enumerate(rankings, start=1):
         print(f"{index}. {row['dungeon']} — {row['total_weight']:g} remaining weight")
         for player in row["players"]:

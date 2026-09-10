@@ -692,6 +692,7 @@ def _dashboard_payload(season: dict, runs: list[dict], briefings: dict | None = 
         payload["loot_priority"] = {
             "season": catalog["season"],
             "role_multipliers": loot.ROLE_MULTIPLIERS,
+            "slot_multipliers": loot.SLOT_MULTIPLIERS,
             "rankings": loot.rank_dungeons(catalog),
         }
     except (OSError, loot.LootCatalogError):
@@ -839,7 +840,7 @@ _HTML = r"""<!doctype html>
   <section id="loot-section" style="display:none">
   <h2 style="margin-top:14px">Dungeon loot priority</h2>
   <div id="loot-recommendation" class="verdict"></div>
-  <div class="contrib" style="margin:-4px 0 8px">Guide-listed upgrade candidates: weapons and trinkets score 3, jewelry and off-hands 2, and armor 1. DPS scores receive a 1.5× multiplier. This list assumes no catalogued target is already owned.</div>
+  <div class="contrib" style="margin:-4px 0 8px">Guide-listed upgrade candidates: weapons and trinkets start at 3, jewelry and off-hands at 2, and armor at 1. Weapon scores are reduced to 0.25× because the group is crafting weapons; DPS scores then receive a 1.5× multiplier. This list assumes no catalogued target is already owned.</div>
   <table id="loot-priority"><thead><tr><th>Priority</th><th>Dungeon</th><th>Score</th><th>Targets</th><th>Upgrade candidates</th></tr></thead><tbody></tbody></table>
   </section>
   <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch</h2>

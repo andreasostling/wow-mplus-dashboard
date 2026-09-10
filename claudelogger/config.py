@@ -188,8 +188,17 @@ ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
 # with a foreign group before strangers reach party, cooldown, or CC analysis.
 ROSTER: frozenset[str] = frozenset(ACTIVE_ROSTER)
 
-# Add current-season quick boss-guide links only after checking them.
-BOSS_GUIDES: dict[str, str] = {}
+# Current-season quick boss-guide links shown alongside the configured route.
+BOSS_GUIDES: dict[str, str] = {
+    "Altar of Fangs": "https://youtu.be/5mG-QcLTInM",
+    "Den of Nalorakk": "https://youtu.be/WVtcwbnikaw",
+    "Murder Row": "https://youtu.be/ISyJOr0AsOQ",
+    "The Blinding Vale": "https://youtu.be/fi-inIgju7w",
+    "Voidscar Arena": "https://youtu.be/rIUAuwBiaV4",
+    "Ruby Life Pools": "https://youtu.be/RFb2M_xUj5Y",
+    "King's Rest": "https://youtu.be/4B5GGsppxpc",
+    "Temple of Sethraliss": "https://youtu.be/RzaifpU_FwE",
+}
 
 
 @dataclass
