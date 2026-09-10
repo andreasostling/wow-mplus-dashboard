@@ -16,17 +16,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-# Default routes (keystone.guru short codes), editable in routes.json at repo root.
-DEFAULT_ROUTES: dict[str, str] = {
-    "Algeth'ar Academy": "9PNs04g",
-    "Magisters' Terrace": "gPJe7sy",
-    "Maisara Caverns": "sezZwXs",
-    "Nexus-Point Xenas": "qb5NbFE",
-    "Pit of Saron": "mPZiMk1",
-    "Seat of the Triumvirate": "npvVcGj",
-    "Skyreach": "kTPSQ7o",
-    "Windrunner Spire": "CrL1WLR",
-}
+# Current routes belong in routes.json. Season 1 defaults are deliberately not carried
+# into Season 2 briefings; an absent route is more honest than a stale pull plan.
+DEFAULT_ROUTES: dict[str, str] = {}
 
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

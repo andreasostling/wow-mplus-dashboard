@@ -51,7 +51,9 @@ collapsed. On top of that:
 1. Create a client at <https://www.warcraftlogs.com/api/clients/> (any name; redirect
    URL `https://localhost`).
 2. Copy `.env.example` to `.env` and paste the **Client ID** (a UUID) and **Client Secret**.
-3. Python 3.11+. No dependencies — stdlib only.
+3. Set `WCL_CHARACTER_ID` to any current roster member's Warcraft Logs character ID if
+   you want `season` to discover reports. Explicit `report <CODE>` runs do not need it.
+4. Python 3.11+. No dependencies — stdlib only.
 
 ## Usage
 
@@ -64,6 +66,30 @@ python -m claudelogger season [--limit 25]
 
 # Print a dungeon's pre-run briefing to the terminal (after report/season)
 python -m claudelogger briefing "Nexus"
+
+# Rank active-season dungeons by remaining guide-listed upgrades
+python -m claudelogger loot
+python -m claudelogger loot --owned owned-loot.json --json
+```
+
+## Loot priority
+
+`loot` ranks the active MID2 dungeon pool using the guide-listed upgrades in
+`data/loot-priorities.json`; these are candidates to consider, not unconditional BiS.
+Each unresolved weapon or trinket scores 3, neck/ring/off-hand scores 2, and armor
+scores 1. DPS targets receive a 1.5x role multiplier; tank and healer targets remain at
+1x. The generated GitHub Pages dashboard displays the current team ranking above the
+pre-run briefing. Item IDs and boss drops are deliberately left unresolved until verified from
+a live game item API, so the catalog uses stable target IDs for ownership tracking.
+
+An owned-items file maps a roster player to exact item IDs (when known), target IDs, or
+exact item names. For example:
+
+```json
+{
+  "Gaddini": ["gaddini-vale-core"],
+  "Stickerduva": ["Jeweled Dagger of Subjugation"]
+}
 ```
 
 Outputs land in `out/`:

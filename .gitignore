@@ -5,7 +5,8 @@
 
 # Cached API responses / local data
 /cache/
-/data/
+/data/*
+!/data/loot-priorities.json
 *.sqlite
 *.db
 

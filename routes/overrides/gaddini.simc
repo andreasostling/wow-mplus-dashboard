@@ -1,4 +1,2 @@
-# Gaddini — Frost Mage
-# Talents pulled from Raider.IO — active loadout (Frost Mage).
-# WCL gear is used.
-talents=CAEAAAAAAAAAAAAAAAAAAAAAAMzwYZmZmFmZmYGmZmZmZWMzMMjZgAAAzMzssMz0GAAsAAAAsAw22YmZGMbDjZGbAAAMzGwMZMgZwA
+# Gaddini — Arcane Mage
+# Run `python -m claudelogger talents Gaddini` to refresh this active loadout.

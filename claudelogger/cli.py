@@ -6,14 +6,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
+from pathlib import Path
 
 import re
 
-from . import armory, fetch, keystone, knowledge, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
+from . import armory, fetch, keystone, knowledge, loot, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
 from .classify import classify_fight
-from .config import ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT, ROSTER
+from .config import ACTIVE_ROSTER, ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT, ROSTER
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
 from .wcl import WCLClient
 
@@ -291,6 +293,10 @@ def cmd_report(args) -> int:
 
 def cmd_season(args) -> int:
     cfg = Config.load()
+    if cfg.character_id <= 0:
+        print("season requires WCL_CHARACTER_ID for a current roster member in .env.",
+              file=sys.stderr)
+        return 2
     client = WCLClient(cfg.client_id, cfg.client_secret, cfg.cache_dir)
     mdt_facts = knowledge.load_mdt(cfg.cache_dir, cfg.mdt_expansion)
     npc_sets = knowledge.load_mdt_npc_sets(cfg.cache_dir, cfg.mdt_expansion)
@@ -355,6 +361,10 @@ def cmd_simc(args) -> int:
     if args.report:
         report_code = args.report
     else:
+        if cfg.character_id <= 0:
+            print("simc without --report requires WCL_CHARACTER_ID for a current roster "
+                  "member in .env.", file=sys.stderr)
+            return 2
         # Auto-detect latest report
         reports = fetch.discover_reports(client, cfg.character_id, 1)
         if not reports:
@@ -603,14 +613,21 @@ def _emit_simc(
 def cmd_talents(args) -> int:
     """Refresh routes/overrides/<name>.simc talents= lines from Raider.IO active loadouts.
 
-    Without names, refreshes the configured roster (ARMORY_CHARACTERS). With names, looks
-    each up in the roster or falls back to <name> on the default/--region/--realm."""
+    Without names, refreshes the confirmed armory characters. A current-roster member
+    without a configured realm requires explicit --region and --realm; ad-hoc names use
+    the default/--region/--realm."""
     cfg = Config.load()
     overrides_dir = cfg.routes_simc_dir.parent / "overrides"
     overrides_dir.mkdir(parents=True, exist_ok=True)
     names = args.players or list(ARMORY_CHARACTERS)
     rc = 0
     for disp in names:
+        if (disp in ACTIVE_ROSTER and disp not in ARMORY_CHARACTERS
+                and not (args.region and args.realm)):
+            print(f"  talents: {disp}: no verified Raider.IO realm configured — "
+                  "supply both --region and --realm.", file=sys.stderr)
+            rc = 1
+            continue
         region, realm, aname = ARMORY_CHARACTERS.get(disp, ("eu", "doomhammer", disp.lower()))
         if args.region:
             region = args.region
@@ -652,6 +669,30 @@ def cmd_briefing(args) -> int:
     return 0
 
 
+def cmd_loot(args) -> int:
+    """Rank current dungeons by remaining guide-listed targets from the local catalog."""
+    try:
+        catalog = loot.load_catalog(args.catalog)
+        owned = loot.load_owned(args.owned) if args.owned else {}
+        rankings = loot.rank_dungeons(catalog, owned)
+    except (OSError, loot.LootCatalogError) as exc:
+        print(f"loot: {exc}", file=sys.stderr)
+        return 2
+    result = {"season": catalog["season"], "game_version": catalog["game_version"],
+              "rankings": rankings}
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(f"Loot priority — {catalog['season']} ({catalog['game_version']}; DPS score x1.5)")
+    for index, row in enumerate(rankings, start=1):
+        print(f"{index}. {row['dungeon']} — {row['total_weight']:g} remaining weight")
+        for player in row["players"]:
+            items = ", ".join(f"{target['item_name']} ({target['slot']}, {target['source'] or 'guide-listed source'})"
+                              for target in player["targets"])
+            print(f"   {player['player']} ({player['spec']}): {items}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # The briefings + progress lines contain emoji/Unicode; the Windows console
     # defaults to cp1252. Reconfigure both streams (progress goes to stderr).
@@ -688,6 +729,14 @@ def main(argv: list[str] | None = None) -> int:
     pb = sub.add_parser("briefing", help="Print a dungeon's pre-run briefing (after report/season).")
     pb.add_argument("dungeon", nargs="?", default="", help="Dungeon name (substring match); omit for all.")
     pb.set_defaults(func=cmd_briefing)
+
+    pl = sub.add_parser("loot", help="Rank current dungeons by remaining catalogued loot targets.")
+    pl.add_argument("--catalog", type=Path, default=REPO_ROOT / "data" / "loot-priorities.json",
+                    help="Versioned loot-target catalog JSON.")
+    pl.add_argument("--owned", type=Path, default=None,
+                    help="JSON mapping roster names to item IDs, target IDs, or exact item names.")
+    pl.add_argument("--json", action="store_true", help="Emit the structured ranking as JSON.")
+    pl.set_defaults(func=cmd_loot)
 
     pt = sub.add_parser("talents", help="Refresh routes/overrides/<name>.simc from Raider.IO active loadouts.")
     pt.add_argument("players", nargs="*", help="Player names (default: configured roster).")

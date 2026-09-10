@@ -10,9 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import combatlog, mapviz
+from . import combatlog, loot, mapviz
 from .classify import AVOIDABLE_BUCKETS, INTERRUPT, STUN, DeathFinding
-from .config import BOSS_GUIDES
+from .config import BOSS_GUIDES, REPO_ROOT
 from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
@@ -684,8 +684,25 @@ def write_briefings_md(out_dir: Path, briefings: dict) -> list[Path]:
     return paths
 
 
-def write_json(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None) -> Path:
+def _dashboard_payload(season: dict, runs: list[dict], briefings: dict | None = None,
+                       simc_data: dict | None = None) -> dict[str, Any]:
     payload = {"season": season, "runs": runs, "briefings": briefings or {}}
+    try:
+        catalog = loot.load_catalog(REPO_ROOT / "data" / "loot-priorities.json")
+        payload["loot_priority"] = {
+            "season": catalog["season"],
+            "role_multipliers": loot.ROLE_MULTIPLIERS,
+            "rankings": loot.rank_dungeons(catalog),
+        }
+    except (OSError, loot.LootCatalogError):
+        pass
+    if simc_data:
+        payload["simc"] = simc_data
+    return payload
+
+
+def write_json(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None) -> Path:
+    payload = _dashboard_payload(season, runs, briefings)
     path = out_dir / "analysis.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
@@ -695,9 +712,7 @@ def write_json(out_dir: Path, season: dict, runs: list[dict], briefings: dict | 
 # HTML dashboard — self-contained, data embedded, vanilla JS for sort/filter.
 # --------------------------------------------------------------------------
 def write_html(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None, simc_data: dict | None = None) -> Path:
-    payload = {"season": season, "runs": runs, "briefings": briefings or {}}
-    if simc_data:
-        payload["simc"] = simc_data
+    payload = _dashboard_payload(season, runs, briefings, simc_data)
     data_json = json.dumps(payload, ensure_ascii=False)
     path = out_dir / "dashboard.html"
     path.write_text(_HTML.replace("/*DATA*/", data_json), encoding="utf-8")
@@ -705,13 +720,12 @@ def write_html(out_dir: Path, season: dict, runs: list[dict], briefings: dict | 
 
 
 def write_html_artifact(out_dir: Path, season: dict, runs: list[dict], briefings: dict | None = None, simc_data: dict | None = None) -> Path:
-    """Content-only HTML (no doctype/html/head/body wrappers) for publishing as a
-    Claude artifact, which supplies those wrappers itself. The <title> is carried
-    through (it normally lives in the head we drop) so the published artifact is
-    named, not left as the bare filename."""
-    payload = {"season": season, "runs": runs, "briefings": briefings or {}}
-    if simc_data:
-        payload["simc"] = simc_data
+    """Write embeddable HTML without document wrappers.
+
+    The title and styles stay with the body so a host that supplies its own document
+    wrappers can still name and render the dashboard correctly.
+    """
+    payload = _dashboard_payload(season, runs, briefings, simc_data)
     full = _HTML.replace("/*DATA*/", json.dumps(payload, ensure_ascii=False))
     title = full[full.index("<title>"): full.index("</title>") + len("</title>")]
     style = full[full.index("<style>"): full.index("</style>") + len("</style>")]
@@ -793,11 +807,21 @@ _HTML = r"""<!doctype html>
   .cde{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;align-items:start}
   .cde h4{margin:0 0 6px;font-size:13px} .cde .role{color:var(--mut);font-weight:400;font-size:11px}
   .low{color:var(--bad)} .ok-use{color:var(--ok)}
-  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:18px 0 0}
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:18px 0 0;overflow-x:auto}
   .tab{background:none;border:none;color:var(--mut);padding:10px 16px;font:600 13px/1 system-ui,Segoe UI,Roboto,sans-serif;
        cursor:pointer;border-bottom:2px solid transparent;text-transform:uppercase;letter-spacing:.05em}
   .tab:hover{color:var(--ink)} .tab.active{color:var(--ink);border-bottom-color:var(--accent)}
   .tabpanel{display:none} .tabpanel.active{display:block}
+  @media(max-width:700px){
+    .wrap{width:100%;max-width:100%;padding:16px;overflow-x:hidden}
+    .tab{flex:0 0 auto}
+    #loot-priority{table-layout:fixed}
+    #loot-priority th:nth-child(4),#loot-priority td:nth-child(4),
+    #loot-priority th:nth-child(5),#loot-priority td:nth-child(5){display:none}
+    #loot-priority th,#loot-priority td{padding:7px 5px}
+    #loot-priority th:nth-child(1){width:64px}
+    #loot-priority th:nth-child(3){width:52px}
+  }
 </style></head>
 <body><div class="wrap">
   <h1>Mythic+ Analysis</h1>
@@ -812,6 +836,12 @@ _HTML = r"""<!doctype html>
   </div>
 
   <div class="tabpanel active" id="tab-briefing">
+  <section id="loot-section" style="display:none">
+  <h2 style="margin-top:14px">Dungeon loot priority</h2>
+  <div id="loot-recommendation" class="verdict"></div>
+  <div class="contrib" style="margin:-4px 0 8px">Guide-listed upgrade candidates: weapons and trinkets score 3, jewelry and off-hands 2, and armor 1. DPS scores receive a 1.5× multiplier. This list assumes no catalogued target is already owned.</div>
+  <table id="loot-priority"><thead><tr><th>Priority</th><th>Dungeon</th><th>Score</th><th>Targets</th><th>Upgrade candidates</th></tr></thead><tbody></tbody></table>
+  </section>
   <h2 style="margin-top:14px">🗺️ Before the key — route, stops &amp; what to watch</h2>
   <div class="controls"><select id="fBrief"></select><span id="route-link-top" class="hdr-btns"></span></div>
   <div id="briefing"></div>
@@ -995,6 +1025,27 @@ const cards=[["Deaths (cause-relevant)",S.total_deaths],["Avoidable",`${S.avoida
   ["CC-starved pulls",`${S.pulls_cc_starved||0} / ${S.pulls_total||0}`]];
 document.getElementById('cards').append(...cards.map(([l,n])=>
   el(`<div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`)));
+
+// Dungeon loot priority. The catalog is embedded when the report is generated so the
+// published GitHub Pages dashboard needs no API calls at view time.
+const LOOT = DATA.loot_priority;
+if(LOOT && LOOT.rankings && LOOT.rankings.length){
+  document.getElementById('loot-section').style.display='';
+  const top = LOOT.rankings[0];
+  document.getElementById('loot-recommendation').innerHTML =
+    `<b>Run ${esc(top.dungeon)} first.</b> It has the highest current team score `
+    + `(${esc(top.total_weight)} across ${esc(top.target_count)} remaining targets).`;
+  const tbody = document.querySelector('#loot-priority tbody');
+  LOOT.rankings.forEach((row,index)=>{
+    const candidates = row.players.map(player=>{
+      const items = player.targets.map(target=>`${esc(target.item_name)} <span class="muted">(${esc(target.slot)})</span>`).join(', ');
+      return `<div><b>${esc(player.player)} (${esc(player.spec)})</b>: ${items}</div>`;
+    }).join('');
+    const candidateDetails = `<details><summary>${row.target_count} targets for ${row.players.length} players</summary>${candidates}</details>`;
+    tbody.append(el(`<tr><td>${index+1}</td><td><b>${esc(row.dungeon)}</b></td>`
+      + `<td>${esc(row.total_weight)}</td><td>${esc(row.target_count)}</td><td>${candidateDetails}</td></tr>`));
+  });
+}
 // pre-run briefing (per dungeon)
 const BRIEF = DATA.briefings || {};
 const actionCss = {Interrupt:'b-interrupt', Stun:'b-stun', Move:'b-ground',

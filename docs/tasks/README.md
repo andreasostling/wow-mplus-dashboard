@@ -1,7 +1,7 @@
 # Task queue
 
-One file per task, each **self-contained**: a Claude reading only that file plus
-[CLAUDE.md](../../CLAUDE.md) should be able to act without replaying the chat it came from.
+One file per task, each **self-contained**: an agent reading only that file plus
+[AGENTS.md](../../AGENTS.md) should be able to act without replaying the chat it came from.
 
 - **Pick up** any `*.md` file here (not this README). Newest work isn't implied by name —
   read the files and ask the user if priority is unclear.

@@ -16,7 +16,7 @@ from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
 )
-from claudelogger.config import Knobs
+from claudelogger.config import ACTIVE_ROSTER, Knobs, ROSTER
 from claudelogger.fetch import Actor, Fight, FightEvents, ReportData
 
 
@@ -46,6 +46,18 @@ def fight(**over):
                 encounter_id=0, start_time=0, end_time=100000, zone_id=0, zone_name="")
     base.update(over)
     return Fight(**base)
+
+
+class TestActiveRoster(unittest.TestCase):
+    def test_new_season_five_stack_and_spec_mapping(self):
+        self.assertEqual(ACTIVE_ROSTER, {
+            "Cybop": ("Paladin", "Protection", "tank"),
+            "Gaddini": ("Mage", "Arcane", "dps"),
+            "Konstanten": ("Shaman", "Restoration", "healer"),
+            "Neutronflux": ("Evoker", "Devastation", "dps"),
+            "Stickerduva": ("Rogue", "Subtlety", "dps"),
+        })
+        self.assertEqual(ROSTER, frozenset(ACTIVE_ROSTER))
 
 
 # --------------------------------------------------------------------------
@@ -667,8 +679,11 @@ class TestMissedCooldownUses(unittest.TestCase):
     def test_short_cd_not_tracked_but_long_cd_is(self):
         casts = [{"abilityGameID": 1, "type": "cast", "timestamp": 0},
                  {"abilityGameID": 2, "type": "cast", "timestamp": 0}]
-        table = [(1, "Short", 25), (2, "Long", 120)]
-        rows = cd_economy._cd_rows(casts, table, 360.0, 0.6, 0, 360_000, missed_min_cd_s=45.0)
+        table = [(1, "Short", 25, True), (2, "Long", 120, True)]
+        rows = cd_economy._cd_rows(
+            casts, table, 360.0, 0.6, 0, 360_000,
+            missed_min_cd_s=45.0, rarely_frac=0.25,
+        )
         short, long = {r["name"]: r for r in rows}["Short"], {r["name"]: r for r in rows}["Long"]
         self.assertFalse(short["track_missed"])
         self.assertTrue(long["track_missed"])

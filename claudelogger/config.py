@@ -135,78 +135,61 @@ class Knobs:
     wipe_keep: int = 2
 
 
-# Dungeon timers (seconds) — Midnight Season 1 M+.
+# Dungeon timers (seconds) — Midnight Season 2 M+.
 DUNGEON_TIMERS: dict[str, int] = {
-    "Algeth'ar Academy": 1800,
-    "Magisters' Terrace": 2040,
-    "Maisara Caverns": 1980,
-    "Nexus-Point Xenas": 1800,
-    "Pit of Saron": 1680,
-    "Seat of the Triumvirate": 1800,
-    "Skyreach": 1680,
-    "Windrunner Spire": 1980,
+    "Altar of Fangs": 1800,
+    "Murder Row": 2040,
+    "Den of Nalorakk": 1920,
+    "The Blinding Vale": 1860,
+    "Voidscar Arena": 1800,
+    "King's Rest": 1980,
+    "Temple of Sethraliss": 1980,
+    "Ruby Life Pools": 1680,
 }
 
-# WCL encounter ids for the Midnight S1 Mythic+ zone (worldData.zone 47). Used to pull
-# public fightRankings so un-logged dungeons can still get an (estimated) dangerous-cast
-# list from other groups' logs.
+# Verified WCL encounter ids for the Midnight S2 Mythic+ pool. Add an entry only after a
+# current report confirms it; public-danger sampling skips dungeons that are not listed.
 MPLUS_ENCOUNTERS: dict[str, int] = {
-    "Algeth'ar Academy": 112526,
-    "Magisters' Terrace": 12811,
-    "Maisara Caverns": 12874,
-    "Nexus-Point Xenas": 12915,
-    "Pit of Saron": 10658,
-    "Seat of the Triumvirate": 361753,
-    "Skyreach": 61209,
-    "Windrunner Spire": 12805,
+    "Ruby Life Pools": 112521,
 }
 
 # Map dungeon name → slug used for route .simc file names.
 DUNGEON_SLUGS: dict[str, str] = {
-    "Algeth'ar Academy": "algethar-academy",
-    "Magisters' Terrace": "magisters-terrace",
-    "Maisara Caverns": "maisara-caverns",
-    "Nexus-Point Xenas": "nexus-point-xenas",
-    "Pit of Saron": "pit-of-saron",
-    "Seat of the Triumvirate": "seat-of-the-triumvirate",
-    "Skyreach": "skyreach",
-    "Windrunner Spire": "windrunner-spire",
+    "Altar of Fangs": "altar-of-fangs",
+    "Murder Row": "murder-row",
+    "Den of Nalorakk": "den-of-nalorakk",
+    "The Blinding Vale": "the-blinding-vale",
+    "Voidscar Arena": "voidscar-arena",
+    "King's Rest": "kings-rest",
+    "Temple of Sethraliss": "temple-of-sethraliss",
+    "Ruby Life Pools": "ruby-life-pools",
+}
+
+# Active five-player roster: player display name -> (class, spec, role).  Keep this as
+# the authoritative team definition; `ROSTER` below is derived from it for log filtering.
+ACTIVE_ROSTER: dict[str, tuple[str, str, str]] = {
+    "Cybop": ("Paladin", "Protection", "tank"),
+    "Gaddini": ("Mage", "Arcane", "dps"),
+    "Konstanten": ("Shaman", "Restoration", "healer"),
+    "Neutronflux": ("Evoker", "Devastation", "dps"),
+    "Stickerduva": ("Rogue", "Subtlety", "dps"),
 }
 
 # Raider.IO armory lookups for `talents` (player display name -> region, realm, armory
-# name). Used to refresh routes/overrides/<name>.simc from each player's active loadout.
-# Defaults: the fixed 5-stack's DPS on EU-Doomhammer (healer is not DPS-simmed; the tank
-# keeps a hand-maintained full profile). `talents <name>` also accepts ad-hoc names.
+# name). Only confirmed EU-Doomhammer characters are listed: do not guess a realm for
+# Cybop, Konstanten, or Neutronflux. `talents <name>` still accepts an explicit ad-hoc
+# lookup with --region/--realm.
 ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
     "Stickerduva": ("eu", "doomhammer", "stickerduva"),
     "Gaddini": ("eu", "doomhammer", "gaddini"),
-    "Decayheat": ("eu", "doomhammer", "decayheat"),
 }
 
-# The fixed 5-stack's character names (all known aliases). A legitimate M+ run logs
-# exactly these 5 players; the 5th slot is one player who logs as Decayheat, Neutronflux
-# (both Warlock), OR Donnager (a Demon Hunter alt — same person, different class/kit).
-# Used to reject fights WCL merged with a foreign group: a 25-friendly Skyreach segment
-# once leaked ~20 strangers into the season, polluting the comp-CC kit and roster. A fight
-# whose friendly set isn't a clean subset of this roster of size 5 is skipped — see
-# `cli.analyze_report`. The fixed-5-stack assumption is baked in project-wide (CLAUDE.md).
-ROSTER: frozenset[str] = frozenset({
-    "Chibes", "Stickerduva", "Gaddini", "Invarianten",
-    "Decayheat", "Neutronflux", "Donnager",   # 5th slot, same player (Warlock / Warlock / DH)
-})
+# A legitimate M+ run logs exactly these five players. Used to reject fights WCL merged
+# with a foreign group before strangers reach party, cooldown, or CC analysis.
+ROSTER: frozenset[str] = frozenset(ACTIVE_ROSTER)
 
-# Per-dungeon "quick boss guide" YouTube links, surfaced in the briefing next to the
-# keystone route link. Keyed by canonical dungeon name (matches DEFAULT_ROUTES).
-BOSS_GUIDES: dict[str, str] = {
-    "Algeth'ar Academy": "https://youtu.be/dvhYFJBSJhM",
-    "Magisters' Terrace": "https://youtu.be/FRnQyotFi04",
-    "Maisara Caverns": "https://youtu.be/8cpsHnvKPZM",
-    "Nexus-Point Xenas": "https://youtu.be/KFoBXcd6w7E",
-    "Pit of Saron": "https://youtu.be/y8l90hq1w3I",
-    "Seat of the Triumvirate": "https://youtu.be/P8ImOX08rZk",
-    "Skyreach": "https://youtu.be/knQiif1k4QA",
-    "Windrunner Spire": "https://youtu.be/P8AUUm_sJ14",
-}
+# Add current-season quick boss-guide links only after checking them.
+BOSS_GUIDES: dict[str, str] = {}
 
 
 @dataclass
