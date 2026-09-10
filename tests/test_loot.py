@@ -52,9 +52,9 @@ class TestLootCatalog(unittest.TestCase):
             for player in row["players"]:
                 self.assertNotIn("slot_adjusted_weight", player)
 
-    def test_nullable_item_and_source_are_valid_and_target_id_filters_owned(self):
+    def test_resolved_item_id_and_nullable_source_support_target_id_filters(self):
         target = next(t for t in self.catalog["targets"] if t["target_id"] == "konstanten-den-pilfered-band")
-        self.assertIsNone(target["item_id"])
+        self.assertEqual(target["item_id"], 251148)
         self.assertIsNone(target["source"])
         row = next(r for r in loot.rank_dungeons(self.catalog, {"Konstanten": {target["target_id"]}})
                    if r["dungeon"] == "Den of Nalorakk")

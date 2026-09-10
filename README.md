@@ -70,6 +70,9 @@ python -m claudelogger briefing "Nexus"
 # Rank active-season dungeons by remaining guide-listed upgrades
 python -m claudelogger loot
 python -m claudelogger loot --owned owned-loot.json --json
+
+# Refresh the local five-player Armory gear snapshot before recalculating loot priority
+python -m claudelogger gear --refresh
 ```
 
 ## Loot priority
@@ -92,6 +95,14 @@ exact item names. For example:
   "Stickerduva": ["Jeweled Dagger of Subjugation"]
 }
 ```
+
+The default ranking also reads the local cached snapshot at `cache/gear/team-gear.json`, refreshed with
+`python -m claudelogger gear --refresh` from the public Blizzard Armory profiles for the
+five active players. Every guide-listed target carries a stable game item ID. A target
+is removed only when that exact item is currently equipped at **Myth track**. Hero,
+Champion, crafted, and untracked items remain in the priority
+calculation. The gear snapshot is local planning data; the dashboard shows only the
+resulting loot priority, not anyone's equipment.
 
 Outputs land in `out/`:
 - `analysis.json` — the full structured result (source of truth, diff-able).

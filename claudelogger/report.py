@@ -10,9 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import combatlog, loot, mapviz
+from . import armory, combatlog, loot, mapviz
 from .classify import AVOIDABLE_BUCKETS, INTERRUPT, STUN, DeathFinding
-from .config import BOSS_GUIDES, REPO_ROOT
+from .config import BOSS_GUIDES, REPO_ROOT, TEAM_GEAR_PATH
 from .knowledge import COMP_CC_SEED, comp_cc_kit
 
 
@@ -689,10 +689,21 @@ def _dashboard_payload(season: dict, runs: list[dict], briefings: dict | None = 
     payload = {"season": season, "runs": runs, "briefings": briefings or {}}
     try:
         catalog = loot.load_catalog(REPO_ROOT / "data" / "loot-priorities.json")
+        myth_owned: dict[str, set[str]] = {}
+        ownership_note = "No team gear sync has been saved yet; all listed upgrades remain eligible."
+        try:
+            gear_snapshot = armory.load_gear_snapshot(TEAM_GEAR_PATH)
+            if gear_snapshot["players"]:
+                myth_owned = armory.owned_myth_targets(catalog, gear_snapshot)
+                ownership_note = ("The ranking excludes listed targets currently equipped at Myth track "
+                                  "in the latest team Armory sync; other tracks stay eligible.")
+        except (OSError, armory.ArmoryGearError):
+            ownership_note = "The team gear sync could not be read; all listed upgrades remain eligible."
         payload["loot_priority"] = {
             "season": catalog["season"],
             "role_multipliers": loot.ROLE_MULTIPLIERS,
-            "rankings": loot.rank_dungeons(catalog),
+            "rankings": loot.rank_dungeons(catalog, myth_owned),
+            "ownership_note": ownership_note,
         }
     except (OSError, loot.LootCatalogError):
         pass
@@ -839,7 +850,7 @@ _HTML = r"""<!doctype html>
   <section id="loot-section" style="display:none">
   <h2 style="margin-top:14px">Dungeon loot priority</h2>
   <div id="loot-recommendation" class="verdict"></div>
-  <div class="contrib" style="margin:-4px 0 8px">Team scoring: trinkets 3, jewelry and off-hands 2, armor 1, and weapons 0.25 because the group is crafting them. DPS upgrades receive a 1.5× role weight. The ranking assumes nobody already owns a listed upgrade.</div>
+  <div id="loot-method" class="contrib" style="margin:-4px 0 8px"></div>
   <table id="loot-priority"><thead><tr><th>Priority</th><th>Dungeon</th><th>Team score</th><th>Listed upgrades</th><th>Upgrade details</th></tr></thead><tbody></tbody></table>
   </section>
   <h2 style="margin-top:14px">🗺️ Dungeon plan: route, stops and boss guide</h2>
@@ -1035,6 +1046,9 @@ if(LOOT && LOOT.rankings && LOOT.rankings.length){
   document.getElementById('loot-recommendation').innerHTML =
     `<b>Prioritize ${esc(top.dungeon)}.</b> It offers the strongest current team loot value: `
     + `${esc(top.total_weight)} points across ${esc(top.target_count)} listed upgrades.`;
+  document.getElementById('loot-method').textContent =
+    'Team scoring: trinkets 3, jewelry and off-hands 2, armor 1, and weapons 0.25 because the group is crafting them. '
+    + 'DPS upgrades receive a 1.5× role weight. ' + (LOOT.ownership_note || 'All listed upgrades remain eligible.');
   const tbody = document.querySelector('#loot-priority tbody');
   LOOT.rankings.forEach((row,index)=>{
     const candidates = row.players.map(player=>{

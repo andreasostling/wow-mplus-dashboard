@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+TEAM_GEAR_PATH = REPO_ROOT / "cache" / "gear" / "team-gear.json"
 
 
 def load_env(path: Path | None = None) -> dict[str, str]:
@@ -175,13 +176,15 @@ ACTIVE_ROSTER: dict[str, tuple[str, str, str]] = {
     "Stickerduva": ("Rogue", "Subtlety", "dps"),
 }
 
-# Raider.IO armory lookups for `talents` (player display name -> region, realm, armory
-# name). Only confirmed EU-Doomhammer characters are listed: do not guess a realm for
-# Cybop, Konstanten, or Neutronflux. `talents <name>` still accepts an explicit ad-hoc
-# lookup with --region/--realm.
+# Public Armory lookups for the active roster (player display name -> region, realm,
+# Armory name). These same verified profiles power `gear` and the optional `talents`
+# refresh; all five are on EU-Doomhammer.
 ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
-    "Stickerduva": ("eu", "doomhammer", "stickerduva"),
+    "Cybop": ("eu", "doomhammer", "cybop"),
     "Gaddini": ("eu", "doomhammer", "gaddini"),
+    "Konstanten": ("eu", "doomhammer", "konstanten"),
+    "Neutronflux": ("eu", "doomhammer", "neutronflux"),
+    "Stickerduva": ("eu", "doomhammer", "stickerduva"),
 }
 
 # A legitimate M+ run logs exactly these five players. Used to reject fights WCL merged

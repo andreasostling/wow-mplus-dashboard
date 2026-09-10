@@ -43,6 +43,10 @@ exports are added.
 
 **Route.** A Keystone Guru pull plan. Route data supplies expected enemies, floors, and lust placement for pre-run briefings and SimC analysis.
 
+**Myth-track ownership.** A guide-listed target is counted as obtained only when the
+cached Armory snapshot shows the same stable item ID equipped with a Midnight Season 2
+Myth-track bonus ID. Item level and item name alone are not enough.
+
 **BiS ceiling.** A SimulationCraft result using the player’s route/talents with reference best-in-slot gear. It estimates pure gear upside and is not a real-player ranking.
 
 **Ilvl-capped peer field.** A ranking field restricted near a roster player’s equipped item level, used as a more gear-fair comparison than the full public field.

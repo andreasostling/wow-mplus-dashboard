@@ -15,7 +15,7 @@ import re
 
 from . import armory, fetch, keystone, knowledge, loot, mdt, report, simc, route_analysis, run_analysis, cd_economy, combatlog, danger, guides
 from .classify import classify_fight
-from .config import ACTIVE_ROSTER, ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT, ROSTER
+from .config import ACTIVE_ROSTER, ARMORY_CHARACTERS, Config, DUNGEON_SLUGS, MPLUS_ENCOUNTERS, REPO_ROOT, ROSTER, TEAM_GEAR_PATH
 from .knowledge import COMP_CC_SEED, STUN_LIKE_KINDS
 from .wcl import WCLClient
 
@@ -672,13 +672,41 @@ def cmd_briefing(args) -> int:
     return 0
 
 
+def cmd_gear(args) -> int:
+    """Refresh the active roster's public Armory equipment snapshot."""
+    cache_dir = REPO_ROOT / "cache"
+    cache_dir.mkdir(exist_ok=True)
+    try:
+        snapshot = armory.build_team_gear_snapshot(ARMORY_CHARACTERS, cache_dir,
+                                                   refresh=args.refresh)
+        catalog = loot.load_catalog(REPO_ROOT / "data" / "loot-priorities.json")
+        owned = armory.owned_myth_targets(catalog, snapshot)
+    except (OSError, ValueError, armory.ArmoryGearError, loot.LootCatalogError) as exc:
+        print(f"gear: {exc}", file=sys.stderr)
+        return 2
+    TEAM_GEAR_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TEAM_GEAR_PATH.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Saved current Armory gear for {len(snapshot['players'])} players to {TEAM_GEAR_PATH.relative_to(REPO_ROOT)}.")
+    for player in ACTIVE_ROSTER:
+        item_count = len(next((profile["items"] for profile in snapshot["players"]
+                               if profile["player"] == player), []))
+        matched = sorted(owned.get(player, set()))
+        print(f"  {player}: {item_count} equipped items; {len(matched)} Myth-track catalog target(s) counted as obtained"
+              + (f" ({', '.join(matched)})" if matched else ""))
+    print("Re-run 'report' or 'season' to publish the refreshed loot priority.")
+    return 0
+
+
 def cmd_loot(args) -> int:
     """Rank current dungeons by remaining guide-listed targets from the local catalog."""
     try:
         catalog = loot.load_catalog(args.catalog)
-        owned = loot.load_owned(args.owned) if args.owned else {}
+        owned = armory.owned_myth_targets(catalog, armory.load_gear_snapshot(TEAM_GEAR_PATH))
+        if args.owned:
+            for player, selectors in loot.load_owned(args.owned).items():
+                owned.setdefault(player, set()).update(selectors)
         rankings = loot.rank_dungeons(catalog, owned)
-    except (OSError, loot.LootCatalogError) as exc:
+    except (OSError, loot.LootCatalogError, armory.ArmoryGearError) as exc:
         print(f"loot: {exc}", file=sys.stderr)
         return 2
     result = {"season": catalog["season"], "game_version": catalog["game_version"],
@@ -741,6 +769,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="JSON mapping roster names to item IDs, target IDs, or exact item names.")
     pl.add_argument("--json", action="store_true", help="Emit the structured ranking as JSON.")
     pl.set_defaults(func=cmd_loot)
+
+    pg = sub.add_parser("gear", help="Save current equipped gear for the active roster from Blizzard Armory.")
+    pg.add_argument("--refresh", action="store_true", help="Bypass the Armory gear cache and fetch each profile again.")
+    pg.set_defaults(func=cmd_gear)
 
     pt = sub.add_parser("talents", help="Refresh routes/overrides/<name>.simc from Raider.IO active loadouts.")
     pt.add_argument("players", nargs="*", help="Player names (default: configured roster).")
