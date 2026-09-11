@@ -8,7 +8,7 @@ ClaudeLogger analyzes a fixed Mythic+ five-player group’s Warcraft Logs deaths
 - Secrets belong only in the git-ignored `.env`. Never commit or print the Warcraft Logs client secret.
 - Cache all external data under `cache/`: WCL GraphQL responses by query hash, MDT parses, Keystone routes, guides, and map tiles. Cached re-runs should be offline and rate-limit-friendly. Delete an individual cache item or use a loader’s `refresh=True` to refresh it.
 - Put every analysis threshold in `config.py:Knobs`; do not hard-code classifier thresholds.
-- For a fast cached loop, use `python -m claudelogger report LZBgMVX3yrf26CKP --fight 3` (Nexus-Point Xenas +12). Do not run a full `season` merely to test a focused change.
+- For a fast cached loop, use `python -m claudelogger report qTPgY3v4rLzbWVct --fight 7` (The Blinding Vale +9, current roster, has `combatantInfo`; drop `--fight` for all four cached runs of that report). The older `LZBgMVX3yrf26CKP --fight 3` log is a pre-Season-2 party and is now skipped by the clean-5-stack roster gate. Do not run a full `season` merely to test a focused change. Note that `report` also rewrites the tracked `docs/index.html`; revert it unless you intend to publish.
 - Outputs live in `out/`: `analysis.json` is the source of truth; `dashboard.html` is self-contained; `dashboard_artifact.html` is content-only; briefings are in `out/briefings/`; SimC artifacts are in `out/simc/` and `out/simc_analysis.json`.
 - The task queue is [docs/tasks/](docs/tasks/). Each file must be self-contained; delete it in the same change that completes it. Follow [docs/tasks/README.md](docs/tasks/README.md).
 
