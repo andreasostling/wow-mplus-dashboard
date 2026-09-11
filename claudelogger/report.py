@@ -1383,7 +1383,9 @@ function render(){
       const lev=[]; if(c.levers.interruptible)lev.push('kick'); if(c.levers.stun_stoppable)lev.push('stun');
       // Ground effects get their own fire-coloured line + badge: "you were standing in it"
       // is a different instruction from "someone should have kicked it".
-      const gnd=!!c.levers.ground_effect, ev=c.levers.ground_evidence||'';
+      // But never both on one line: stop > avoid, so when this contribution has a stop
+      // lever the instruction is the stop, and the fire treatment is suppressed.
+      const gnd=!!c.levers.ground_effect&&!lev.length, ev=c.levers.ground_evidence||'';
       const gtip=ev==='inferred'?'inferred ground effect (periodic damage with no matching debuff) — move out'
                 :ev==='curated'?'known ground effect — move out'
                 :ev==='environment'?'environmental ground damage — move out':'ground effect — move out';
@@ -1391,7 +1393,13 @@ function render(){
         `<span class="${gnd?'g-abil':'muted'}">(${esc(c.source)})</span>`+
         (lev.length?` <span class="lever">[${lev.join('/')}]</span>`:'')+
         (gnd?` <span class="lever-ground" title="${esc(gtip)}">[stood in]</span>`:'');}).join('<br>');
-    const tkLbl={pulled_aggro:'pulled aggro',tank_pickup:'not picked up'}[d.threat_kind]||'';
+    // Threat sub-kind beside the pill. "tank down" is not a verdict on anyone — it says
+    // the death was never judged on threat, because no tank was alive to hold anything.
+    const tkLbl={pulled_aggro:'pulled aggro',tank_pickup:'not picked up',
+                 tank_dead:'tank down'}[d.threat_kind]||'';
+    const tkTip=d.threat_kind==='tank_dead'
+      ?'no tank was alive here — melee on a non-tank is not a pickup failure; see the notes'
+      :'threat sub-kind';
     const av=d.avoidable===true?'<span class="av-yes">yes</span>':
              d.avoidable===false?'<span class="av-no">no</span>':'<span class="av-null">?</span>';
     const hv=d.healer.verdict;
@@ -1410,7 +1418,7 @@ function render(){
     const wclUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(d.report)}`;
     tb.append(el(`<tr><td><a href="${wclUrl}" target="_blank" rel="noopener" title="Open on WCL">${esc(d.dungeon)} +${d.key}</a></td><td>${esc(d.player)}</td><td>${esc(d.role)}</td>
       <td>${d.time_in_fight_s}</td><td>${esc(d.killer)}${d.dangerous_cast?` <span class="av-yes" title="died to a flagged high-damage cast: ${esc(d.dangerous_cast)}">💥</span>`:''}</td>
-      <td><span class="pill ${cls}">${esc(lbl)}</span>${tkLbl?`<span class="subtag" title="threat sub-kind">${tkLbl}</span>`:''}${d.one_shot?' <span class="muted">one-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑ wipe trigger</span>':''}${d.is_cascade?' <span class="muted">follow-on</span>':''}</td>
+      <td><span class="pill ${cls}">${esc(lbl)}</span>${tkLbl?`<span class="subtag" title="${esc(tkTip)}">${tkLbl}</span>`:''}${d.one_shot?' <span class="muted">one-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑ wipe trigger</span>':''}${d.is_cascade?' <span class="muted">follow-on</span>':''}</td>
       <td>${av}</td><td>${d.confidence}</td><td class="contrib">${contrib||'<span class=muted>—</span>'}</td>
       <td>${heal}</td><td class="contrib">${def}</td></tr>`));
   });

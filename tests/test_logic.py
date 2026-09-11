@@ -126,8 +126,10 @@ class TestDecideBucket(unittest.TestCase):
         self.assertGreater(conf, 0.9)
 
     def test_ground_lever(self):
+        # is_ground always travels with the tier that proved it (here: environment).
         b, av, _, _ = _decide_bucket(
-            [contrib(pct=0.7, is_ground=True, is_environment=True, source_name="Environment")],
+            [contrib(pct=0.7, is_ground=True, ground_evidence="environment",
+                     is_environment=True, source_name="Environment")],
             False, 100000)
         self.assertEqual(b, classify.GROUND)
 
@@ -904,14 +906,39 @@ class TestGroundEvidenceTiers(unittest.TestCase):
         off = Knobs(ground_infer_periodic_no_debuff=False)
         self.assertIsNone(self._attr(ticks, knobs=off)[0].ground_evidence)
 
-    def test_inferred_ground_does_not_buy_observed_confidence(self):
-        inferred = contrib(pct=0.7, is_ground=True, ground_evidence="inferred")
-        curated = contrib(pct=0.7, is_ground=True, ground_evidence="curated")
-        b1, _, c1, notes = _decide_bucket([inferred], False, 100000)
-        b2, _, c2, _ = _decide_bucket([curated], False, 100000)
-        self.assertEqual((b1, b2), (classify.GROUND, classify.GROUND))
-        self.assertLess(c1, c2)
-        self.assertIn("inferred", notes[0])
+    def test_inferred_ground_never_sets_the_bucket(self):
+        # The guessing tier keeps its per-contribution badge but must not name a cause.
+        inferred = contrib(pct=0.7, is_ground=True, ground_evidence="inferred",
+                           ability_name="Creeping Murk")
+        curated = contrib(pct=0.7, is_ground=True, ground_evidence="curated",
+                          ability_name="Creeping Murk")
+        b1, _, _c1, _ = _decide_bucket([inferred], False, 100000)
+        b2, _, _c2, notes = _decide_bucket([curated], False, 100000)
+        self.assertNotEqual(b1, classify.GROUND)
+        self.assertEqual(b2, classify.GROUND)
+        self.assertIn("curated", notes[0])
+        self.assertTrue(inferred.is_ground)      # the badge survives
+        # Mixed: only the evidence-backed share counts toward the ground weight, and the
+        # note reports that tier alone rather than advertising the guess as evidence.
+        small = contrib(pct=0.3, is_ground=True, ground_evidence="curated")
+        big = contrib(pct=0.6, is_ground=True, ground_evidence="inferred")
+        b3, _, _c3, notes3 = _decide_bucket([big, small], False, 100000)
+        self.assertEqual(b3, classify.GROUND)
+        self.assertIn("curated", notes3[0])
+        self.assertNotIn("inferred", notes3[0])
+
+    def test_pet_sourced_zone_is_never_flagged(self):
+        rep = self._rep()
+        rep.actors[5] = Actor(5, "Ebonhorn", "Pet", "Hunter")
+        ticks = [_dm(t, 5, 2, ab=72, tick=True) for t in (1000, 2000, 3000)]
+        c = classify._attribute(ticks, rep.actors, rep, knowledge.AbilityKnowledge(),
+                                Knobs(), set())[0]
+        self.assertFalse(c.is_ground)            # a friendly pet's zone is not the lever
+        self.assertIsNone(c.ground_evidence)
+        # Not even the curated tier: a pet is rejected before the id/name fallback.
+        c2 = classify._attribute([_dm(1000, 5, 2, ab=70)], rep.actors, rep,
+                                 knowledge.AbilityKnowledge(), Knobs(), set())[0]
+        self.assertFalse(c2.is_ground)
 
     def test_ground_flag_does_not_mute_the_stun_lever(self):
         # Stop > avoid: a stoppable cast that also leaves a pool must still read as a stop.
@@ -919,6 +946,25 @@ class TestGroundEvidenceTiers(unittest.TestCase):
                     stunnable=True, stunnable_src="observed")
         self.assertTrue(classify._stun_stoppable(c))
         self.assertEqual(_decide_bucket([c], False, 100000)[0], classify.STUN)
+
+    def test_a_stop_lever_beats_heavier_ground_weight_elsewhere(self):
+        # The live case: curated ground on one contribution (0.67) plus environment
+        # ground on another (0.13) out-weighed a 0.67 stun lever on a *third* and flipped
+        # the bucket to GROUND. Stop > avoid — the stop wins whenever it clears the bar.
+        stun = contrib(source_id=10, pct=0.67, ability_name="Gloom Wave",
+                       stunnable=True, stunnable_src="observed")
+        ground = contrib(source_id=11, pct=0.67, ability_name="Suppression Field",
+                         is_ground=True, ground_evidence="curated")
+        env = contrib(source_id=-1, pct=0.13, is_environment=True, is_ground=True,
+                      ground_evidence="environment", source_name="Environment")
+        self.assertEqual(_decide_bucket([ground, stun, env], False, 100000)[0], classify.STUN)
+        kick = contrib(source_id=10, pct=0.3, ability_name="Mend",
+                       interruptible=True, interruptible_src="observed")
+        self.assertEqual(_decide_bucket([ground, kick, env], False, 100000)[0], classify.INTERRUPT)
+        # ...but a stop lever below the bar must not steal the bucket from real ground.
+        weak = contrib(source_id=10, pct=0.1, ability_name="Mend",
+                       interruptible=True, interruptible_src="observed")
+        self.assertEqual(_decide_bucket([ground, weak], False, 100000)[0], classify.GROUND)
 
 
 class TestThreatGuardAndKind(unittest.TestCase):
@@ -961,9 +1007,18 @@ class TestThreatGuardAndKind(unittest.TestCase):
     def test_tank_dead_before_victim_is_not_a_pickup_failure(self):
         f = self._run(tank_deaths=(10000,))
         self.assertNotEqual(f.bucket, classify.OFF_TANK_MELEE)
-        self.assertIsNone(f.threat_kind)
+        # The guard is visible in the data, not only in a note the dashboard never reads.
+        self.assertEqual(f.threat_kind, "tank_dead")
         self.assertTrue(any("Cybop was already dead 5.0s earlier" in n for n in f.notes),
                         f.notes)
+
+    def test_a_tank_dying_in_the_same_millisecond_still_counts_as_alive(self):
+        # They were standing when the lethal damage landed; the shared timestamp must
+        # not wave away a real pickup failure.
+        f = self._run(tank_deaths=(15000,), tank_melee=(2000, 3000, 4000),
+                      victim_melee=range(9000, 15000, 1000))
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertEqual(f.threat_kind, "tank_pickup")
 
     def test_battle_res_lifts_the_guard(self):
         f = self._run(tank_deaths=(10000,),
@@ -1000,6 +1055,44 @@ class TestThreatGuardAndKind(unittest.TestCase):
         f = self._run()                               # tank takes nothing at all
         self.assertEqual(f.threat_kind, "pulled_aggro")
         self.assertEqual(f.confidence, 0.5)           # never tanked => lower confidence
+
+    # ---- _threat_kind in isolation: evidence bounds and the ordering band ----------
+    def _kind(self, *, tank_hits=(), victim_hits=(2000,), death_ts=15000, pull_index=0):
+        """(tanked, kind) for one mob copy (inst 7) with these tank/victim melee stamps."""
+        top = contrib(source_id=self.MOB, ability_id=1, ability_name="Melee")
+        dmg = [_dm(t, self.MOB, self.VICTIM, inst=7) for t in sorted(victim_hits)]
+        mmt = {(pull_index, self.MOB, 7): sorted(tank_hits)} if tank_hits else {}
+        return classify._threat_kind(
+            top, dmg, dmg, [pulls.Pull(index=0, start_ms=0, end_ms=30000)],
+            pull_index, mmt, death_ts, Knobs())
+
+    def test_no_pull_is_unknown_not_pulled_aggro(self):
+        # The tank-side lookup is keyed by pull, so with no pull it can only ever come
+        # back empty — which is not evidence that the tank never had the mob.
+        self.assertEqual(self._kind(pull_index=None), (False, "unknown"))
+        self.assertEqual(self._kind(pull_index=None, tank_hits=(1000,)), (False, "unknown"))
+
+    def test_victim_never_meleed_by_this_copy_is_unknown(self):
+        self.assertEqual(self._kind(victim_hits=(), tank_hits=(1000,))[1], "unknown")
+
+    def test_tank_melee_after_the_death_is_not_evidence(self):
+        # A tank picking the mob up 2.4s *after* the victim died neither proves the mob
+        # was tanked here nor lengthens the pulled-aggro lead.
+        self.assertEqual(self._kind(tank_hits=(17400,)), (False, "pulled_aggro"))
+        # A stamp before the death is evidence, and flips the reading.
+        self.assertEqual(self._kind(tank_hits=(400,)), (True, "tank_pickup"))
+
+    def test_first_hit_band_applies_in_both_directions(self):
+        lead = Knobs().threat_first_hit_lead_ms
+        # Victim first, but inside the band => too close to call.
+        self.assertEqual(self._kind(victim_hits=(10000,), tank_hits=(10001,))[1], "unknown")
+        # Tank first by 1ms is just as inconclusive — it used to read tank_pickup.
+        self.assertEqual(self._kind(victim_hits=(10001,), tank_hits=(10000,))[1], "unknown")
+        # Clear of the band on either side, the ordering means something again.
+        self.assertEqual(self._kind(victim_hits=(10000,), tank_hits=(10000 + lead,))[1],
+                         "pulled_aggro")
+        self.assertEqual(self._kind(victim_hits=(10000 + lead,), tank_hits=(10000,))[1],
+                         "tank_pickup")
 
     def test_tank_alive_helper_handles_a_roster_with_no_tank(self):
         # "We can't identify a tank" must not silently suppress every threat finding.

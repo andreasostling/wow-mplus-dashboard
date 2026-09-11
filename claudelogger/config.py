@@ -53,6 +53,12 @@ class Knobs:
     # called a "meaningful contributor" in attribution.
     contributor_min_frac: float = 0.10
 
+    # A cause lever (interrupt / stun / ground) must explain at least this fraction of
+    # the death window's damage before it may name the death's cause bucket. Stop levers
+    # are tested against it first: per the counter taxonomy, a stop that clears this bar
+    # wins the bucket even when ground weight is higher (classify._decide_bucket).
+    bucket_min_lever_frac: float = 0.25
+
     # Healer "should have healed more" gate (all must hold):
     heal_more_hp_frac: float = 0.35      # target sat at/below this HP fraction...
     heal_more_secs: float = 2.0          # ...for at least this long (reaction time existed)
