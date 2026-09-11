@@ -27,4 +27,4 @@ Write observed behavior as fact, but any suspected *cause* as a hypothesis to ve
 out assumptions to check first, so a wrong guess isn't picked up as a given.
 
 Use the fast test loop where it applies:
-`python3 -m claudelogger report qTPgY3v4rLzbWVct --fight 7` (cached, The Blinding Vale +9, current roster). The older `LZBgMVX3yrf26CKP` log is skipped by the roster gate.
+`python3 -m claudelogger report qTPgY3v4rLzbWVct` (cached, current roster, four runs in about 2 s; add `--fight 7` for The Blinding Vale +9 alone). The older `LZBgMVX3yrf26CKP` log is skipped by the roster gate.
