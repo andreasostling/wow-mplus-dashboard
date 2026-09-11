@@ -702,5 +702,189 @@ class TestMissedCooldownUses(unittest.TestCase):
         self.assertEqual(long["missed"], 2.0)
 
 
+# --------------------------------------------------------------------------
+# ground-effect tiers + threat/pickup sub-kind
+# --------------------------------------------------------------------------
+_GROUND_ABILITIES = {
+    1: "Melee", 70: "Void Sludge", 71: "Some Vendor Name", 72: "Shadow Bolt",
+    73: "Consecration", 1244672: "Nullzone",
+}
+
+
+def _dm(ts, src, tgt, ab=1, amount=10000, inst=0, **kw):
+    e = {"timestamp": ts, "sourceID": src, "targetID": tgt, "abilityGameID": ab,
+         "amount": amount, "sourceInstance": inst}
+    e.update(kw)
+    return e
+
+
+class TestGroundEvidenceTiers(unittest.TestCase):
+    """is_ground now has three labelled tiers; a guess must never look like evidence."""
+
+    def _rep(self):
+        return ReportData(
+            code="X", title="", start_time=0, end_time=100000, zone_id=0, zone_name="",
+            fights=[], ability_names=dict(_GROUND_ABILITIES),
+            actors={a.id: a for a in [
+                Actor(2, "Neutronflux", "Player", "Evoker"),
+                Actor(10, "Bruiser", "NPC", "", game_id=500),
+            ]},
+        )
+
+    def _attr(self, window, knobs=None, debuffs=None):
+        rep = self._rep()
+        return classify._attribute(window, rep.actors, rep, knowledge.AbilityKnowledge(),
+                                   knobs or Knobs(), debuffs or set())
+
+    def test_curated_name_keyword_matches(self):
+        self.assertTrue(knowledge.is_ground_effect(0, "Void Sludge"))
+        self.assertTrue(knowledge.is_ground_effect(0, "Suppression Field"))
+        self.assertTrue(knowledge.is_ground_effect(0, "Blazing Ground"))
+        self.assertTrue(knowledge.is_ground_effect(1244672, "Some Vendor Name"))  # curated id
+        # Deliberately narrow: generic damage names and "Ground" as a prefix stay out.
+        self.assertFalse(knowledge.is_ground_effect(0, "Shadow Bolt"))
+        self.assertFalse(knowledge.is_ground_effect(0, "Fire Breath"))
+        self.assertFalse(knowledge.is_ground_effect(0, "Ground Skimming"))
+        self.assertFalse(knowledge.is_ground_effect(0, None))
+
+    def test_curated_tier_labels_mob_placed_pool(self):
+        c = self._attr([_dm(1000, 10, 2, ab=70), _dm(2000, 10, 2, ab=70)])[0]
+        self.assertTrue(c.is_ground)
+        self.assertEqual(c.ground_evidence, "curated")
+        # A curated id whose name gives nothing away still resolves.
+        c2 = self._attr([_dm(1000, 10, 2, ab=1244672)])[0]
+        self.assertEqual(c2.ground_evidence, "curated")
+
+    def test_environment_tier_still_wins(self):
+        c = self._attr([_dm(1000, -1, 2, ab=72)])[0]
+        self.assertTrue(c.is_ground)
+        self.assertEqual(c.ground_evidence, "environment")
+
+    def test_player_sourced_ground_is_never_blamed(self):
+        rep = self._rep()
+        rep.actors[3] = Actor(3, "Gaddini", "Player", "Mage")
+        c = classify._attribute([_dm(1000, 3, 2, ab=70)], rep.actors, rep,
+                                knowledge.AbilityKnowledge(), Knobs(), set())[0]
+        self.assertFalse(c.is_ground)        # a teammate's floor is not the lever
+        self.assertIsNone(c.ground_evidence)
+        self.assertTrue(c.is_self_or_friendly)
+
+    def test_inferred_tier_needs_ticks_and_no_debuff(self):
+        ticks = [_dm(t, 10, 2, ab=72, tick=True) for t in (1000, 2000, 3000)]
+        c = self._attr(ticks)[0]
+        self.assertTrue(c.is_ground)
+        self.assertEqual(c.ground_evidence, "inferred")
+        # Same ability debuffed the victim from that source => it's a DoT, not a floor.
+        self.assertIsNone(self._attr(ticks, debuffs={(10, 72)})[0].ground_evidence)
+        # One tick is below Knobs.ground_min_ticks.
+        self.assertIsNone(self._attr([_dm(1000, 10, 2, ab=72, tick=True)])[0].ground_evidence)
+        # Non-periodic damage is never inferred ground.
+        self.assertIsNone(self._attr([_dm(t, 10, 2, ab=72) for t in (1000, 2000, 3000)])[0].ground_evidence)
+        # And the whole tier is knob-gated off.
+        off = Knobs(ground_infer_periodic_no_debuff=False)
+        self.assertIsNone(self._attr(ticks, knobs=off)[0].ground_evidence)
+
+    def test_inferred_ground_does_not_buy_observed_confidence(self):
+        inferred = contrib(pct=0.7, is_ground=True, ground_evidence="inferred")
+        curated = contrib(pct=0.7, is_ground=True, ground_evidence="curated")
+        b1, _, c1, notes = _decide_bucket([inferred], False, 100000)
+        b2, _, c2, _ = _decide_bucket([curated], False, 100000)
+        self.assertEqual((b1, b2), (classify.GROUND, classify.GROUND))
+        self.assertLess(c1, c2)
+        self.assertIn("inferred", notes[0])
+
+    def test_ground_flag_does_not_mute_the_stun_lever(self):
+        # Stop > avoid: a stoppable cast that also leaves a pool must still read as a stop.
+        c = contrib(pct=0.8, is_ground=True, ground_evidence="curated",
+                    stunnable=True, stunnable_src="observed")
+        self.assertTrue(classify._stun_stoppable(c))
+        self.assertEqual(_decide_bucket([c], False, 100000)[0], classify.STUN)
+
+
+class TestThreatGuardAndKind(unittest.TestCase):
+    """A melee death is only a pickup failure when a tank was actually alive to tank."""
+
+    TANK, VICTIM, TANK2, MOB = 1, 2, 4, 10
+
+    def _run(self, *, tank_deaths=(), casts=(), tank_melee=(), victim_melee=None,
+             two_tanks=False):
+        actors = [
+            Actor(self.TANK, "Cybop", "Player", "Paladin"),
+            Actor(self.VICTIM, "Neutronflux", "Player", "Evoker"),
+            Actor(self.MOB, "Bruiser", "NPC", "", game_id=500),
+        ]
+        roles = {self.TANK: ("tank", "Protection"), self.VICTIM: ("dps", "Devastation")}
+        if two_tanks:
+            actors.append(Actor(self.TANK2, "Cybopalt", "Player", "Warrior"))
+            roles[self.TANK2] = ("tank", "Protection")
+        rep = ReportData(
+            code="X", title="", start_time=0, end_time=100000, zone_id=0, zone_name="",
+            fights=[], ability_names=dict(_GROUND_ABILITIES),
+            actors={a.id: a for a in actors},
+        )
+        victim_melee = list(victim_melee if victim_melee is not None else range(2000, 15000, 1000))
+        dmg = [_dm(t, self.MOB, self.TANK, inst=7) for t in tank_melee]
+        dmg += [_dm(t, self.MOB, self.VICTIM, inst=7) for t in victim_melee]
+        dmg.append(_dm(15000, self.MOB, self.VICTIM, inst=7, overkill=5000))
+        dmg.sort(key=lambda e: e["timestamp"])
+        deaths = [{"targetID": self.TANK, "timestamp": t, "killerID": self.MOB,
+                   "killingAbilityGameID": 1} for t in tank_deaths]
+        deaths.append({"targetID": self.VICTIM, "timestamp": 15000, "killerID": self.MOB,
+                       "killingAbilityGameID": 1})
+        fe = FightEvents(fight=fight(friendly_players=[a.id for a in actors if a.is_player]),
+                         events={"Deaths": deaths, "DamageTaken": dmg, "Healing": [],
+                                 "Casts": list(casts), "Interrupts": [], "Debuffs": []})
+        findings, _ = classify.classify_fight(
+            rep, fe, knowledge.AbilityKnowledge(), Knobs(), roles)
+        return next(f for f in findings if f.player == "Neutronflux")
+
+    def test_tank_dead_before_victim_is_not_a_pickup_failure(self):
+        f = self._run(tank_deaths=(10000,))
+        self.assertNotEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertIsNone(f.threat_kind)
+        self.assertTrue(any("Cybop was already dead 5.0s earlier" in n for n in f.notes),
+                        f.notes)
+
+    def test_battle_res_lifts_the_guard(self):
+        f = self._run(tank_deaths=(10000,),
+                      casts=[{"type": "cast", "timestamp": 12000, "abilityGameID": 20271,
+                              "sourceID": self.TANK}])
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertIsNotNone(f.threat_kind)
+
+    def test_a_cast_before_the_death_does_not_lift_the_guard(self):
+        f = self._run(tank_deaths=(10000,),
+                      casts=[{"type": "cast", "timestamp": 9000, "abilityGameID": 20271,
+                              "sourceID": self.TANK}])
+        self.assertNotEqual(f.bucket, classify.OFF_TANK_MELEE)
+
+    def test_second_tank_alive_means_the_guard_does_not_fire(self):
+        f = self._run(tank_deaths=(10000,), two_tanks=True)
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+
+    def test_pulled_aggro_when_the_mob_reached_the_victim_first(self):
+        f = self._run(tank_melee=(9000,))
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertEqual(f.threat_kind, "pulled_aggro")
+        self.assertEqual(f.confidence, 0.7)          # tanked in this pull
+        self.assertTrue(any("pulled aggro" in n for n in f.notes), f.notes)
+
+    def test_tank_pickup_when_the_tank_had_it_first(self):
+        f = self._run(tank_melee=(2000, 3000, 4000),
+                      victim_melee=range(9000, 15000, 1000))
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertEqual(f.threat_kind, "tank_pickup")
+        self.assertTrue(any("not picked up" in n for n in f.notes), f.notes)
+
+    def test_tank_never_meleed_by_this_instance_is_pulled_aggro(self):
+        f = self._run()                               # tank takes nothing at all
+        self.assertEqual(f.threat_kind, "pulled_aggro")
+        self.assertEqual(f.confidence, 0.5)           # never tanked => lower confidence
+
+    def test_tank_alive_helper_handles_a_roster_with_no_tank(self):
+        # "We can't identify a tank" must not silently suppress every threat finding.
+        self.assertTrue(classify._tank_alive_at(100, set(), {}, {}))
+
+
 if __name__ == "__main__":
     unittest.main()

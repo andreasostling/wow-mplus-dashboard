@@ -44,8 +44,9 @@ class Knobs:
     # un-healable, never attributed to the healer.
     oneshot_frac: float = 0.90
 
-    # Ground/persistent-area effect: this many ticks of the same ability from the
-    # same source within the window => "stood in it".
+    # Ground/persistent-area effect, "inferred" tier only: this many periodic ticks of
+    # the same ability from the same source within the death window before the
+    # no-debuff test is even considered. See ground_infer_periodic_no_debuff below.
     ground_min_ticks: int = 2
 
     # A contributing source must be at least this fraction of window damage to be
@@ -134,6 +135,24 @@ class Knobs:
     wipe_gap_ms: int = 12_000
     wipe_min_players: int = 4
     wipe_keep: int = 2
+
+    # --- ground-effect detection + threat/pickup sub-kind (classify.py) -------------
+    # Ground detection runs in three labelled tiers, recorded per contribution as
+    # `levers.ground_evidence`: "environment" (WCL sourced it to the Environment),
+    # "curated" (knowledge.GROUND_EFFECT_ABILITIES / name fallback), and this
+    # "inferred" tier — NPC-sourced *periodic* damage with at least ground_min_ticks
+    # ticks in the death window and NO debuff of the same ability from that source on
+    # the victim (a pool ticks on you without debuffing you; a DoT debuffs you). It is
+    # the only guessing tier, so it is gated: set False to trust evidence only.
+    ground_infer_periodic_no_debuff: bool = True
+    # Threat/pickup split. The victim counts as having "pulled aggro" when the mob
+    # instance hit them at least this long before it ever meleed the tank in the same
+    # pull (or never meleed the tank there at all); tank-first-then-switched is a
+    # pickup failure instead.
+    threat_first_hit_lead_ms: int = 1500
+    # How far back of the victim's death a fixate aura still explains a melee death
+    # (a fixate makes it a mechanic, not a tank-aggro failure).
+    threat_fixate_lookback_ms: int = 25_000
 
 
 # Dungeon timers (seconds) — Midnight Season 2 M+.

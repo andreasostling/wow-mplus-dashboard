@@ -228,6 +228,67 @@ def is_fixate(spell_id: int, name: str | None) -> bool:
     return any(k in n for k in _FIXATE_KEYWORDS)
 
 
+# Persistent ground/zone effects: damage you take by STANDING IN something a mob (or
+# the environment) left on the floor. In the counter taxonomy this is the *avoid*
+# lever — move out — one step below stop. WCL exposes no "this is a zone" flag, and in
+# the damage stream a mob-placed pool is indistinguishable from a DoT, so this mirrors
+# the fixate layer: curated ids are authoritative, a deliberately narrow name fallback
+# catches the rest. Tick-pattern guessing is NOT used here (it misfired badly on
+# DoTs/channels/melee); classify.py's separate "inferred" tier is knob-gated and must
+# additionally prove there is no matching debuff on the victim.
+#
+# Evidence for each id is noted below. Extend it as new pools are confirmed in logs.
+GROUND_EFFECT_ABILITIES: dict[int, str] = {
+    # Observed in our own cached logs (LZBgMVX3yrf26CKP fight 3, Nexus-Point Xenas):
+    # repeated small pulses on players from a stationary source, no matching debuff.
+    1269283: "Suppression Field",
+    1269286: "Suppression Field",   # Environment-sourced pulses, 225 hits in one run
+    1282950: "Suppression Field",   # Flux Engineer, 88 hits — Method.gg tags it "avoid"
+    1262630: "Arcane Spill",
+    1264042: "Arcane Spill",        # Broken Pipe / Kasreth — periodic leak on the floor
+    # Method.gg ability tracker, "avoid" category with an exact spell id, whose name or
+    # note describes a persistent area rather than a one-off hit.
+    1266178: "Snowdrift",             # Den of Nalorakk — Glacial Revenant
+    1235814: "Light-Scorched Earth",  # The Blinding Vale — Lightblossom Trinity
+    271563: "Embalming Fluid",        # King's Rest — the pool Mchimba leaves behind
+    273434: "Pit of Despair",         # King's Rest — Minion of Zul
+    1279418: "Arcane Rift",           # Algeth'ar — guide note: "puddle that persists for 90s"
+    # Named in the cached WCL ability tables; the name states a persistent zone but the
+    # one-word/compound spelling is not reachable by the keyword fallback below.
+    1266193: "Snowdrift",
+    1234314: "Snowdrift",
+    1235841: "Snowdrift",
+    1259205: "Cryopatch",
+    1244672: "Nullzone",
+}
+# Substrings that only ever name a zone on the floor. Deliberately narrow: generic
+# "fire", "flame", "aura", "cloud" and the like are excluded because they name plenty
+# of direct hits and DoTs. Suffix forms keep "Blazing Ground" while rejecting
+# "Ground Skimming" / "Lightning Strike Ground Current".
+_GROUND_KEYWORDS = (
+    "pool", "puddle", "quicksand", "sludge", "ooze", "slime", "mire", "ichor",
+    "miasma", "void zone", "scorched earth",
+)
+_GROUND_NAME_SUFFIXES = (" ground", " patch", " zone", " field")
+
+
+def is_ground_effect(ability_id: int, name: str | None) -> bool:
+    """True if an ability is a persistent ground/zone effect you avoid by moving.
+
+    Callers must first exclude player-sourced damage: several player abilities
+    (Anti-Magic Zone, Consecration, Death and Decay) are ground effects too, and
+    blaming a teammate's floor for a death is never the lever we want.
+    """
+    if ability_id in GROUND_EFFECT_ABILITIES:
+        return True
+    n = (name or "").strip().lower()
+    if not n:
+        return False
+    if any(k in n for k in _GROUND_KEYWORDS):
+        return True
+    return any(n.endswith(s) for s in _GROUND_NAME_SUFFIXES)
+
+
 @dataclass
 class AbilityKnowledge:
     # Proven-interruptible NPC spell ids (seen as the interrupted spell).
