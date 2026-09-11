@@ -124,6 +124,26 @@ def _comp_cc_labels(kb: knowledge.AbilityKnowledge) -> dict[str, list[str]]:
     return {"interrupts": sorted(interrupts), "stuns": sorted(stuns), "other_cc": sorted(other)}
 
 
+def _talent_entries_by_player(combatant_events: list[dict]) -> dict[int, set[int]]:
+    """actor_id -> the TraitNodeEntryIDs that player took, from WCL combatantInfo.
+
+    A player is only listed when WCL actually gave us entries. A missing or EMPTY
+    talentTree means "we don't know", not "they took no talents" — listing them with an
+    empty set would read downstream as "owns nothing" and prune their whole kit, so they
+    are omitted and fall back to the baseline path instead.
+    """
+    out: dict[int, set[int]] = {}
+    for ci in combatant_events:
+        aid = ci.get("sourceID")
+        tt = ci.get("talentTree")
+        if aid is None or not isinstance(tt, list):
+            continue
+        entries = {t["id"] for t in tt if isinstance(t, dict) and t.get("id") is not None}
+        if entries:
+            out[aid] = entries
+    return out
+
+
 def analyze_report(
     client: WCLClient, cfg: Config, code: str, only_fight: int | None,
     mdt_facts: dict | None = None,
@@ -186,15 +206,8 @@ def analyze_report(
         # the offensive never/rarely-pressed warning. Present only on some fights — when
         # absent, each consumer falls back (Knobs / the CD's `core` flag). Disk-cached, so
         # fetching it this early costs nothing on a cached re-run.
-        talent_entries_by_player: dict[int, set[int]] = {}
-        for ci in fetch.fetch_combatant_info(client, code, fight):
-            aid = ci.get("sourceID")
-            tt = ci.get("talentTree")
-            if aid is None or not isinstance(tt, list):
-                continue
-            talent_entries_by_player[aid] = {
-                t["id"] for t in tt if isinstance(t, dict) and t.get("id") is not None
-            }
+        talent_entries_by_player = _talent_entries_by_player(
+            fetch.fetch_combatant_info(client, code, fight))
         findings, pull_tallies = classify_fight(
             rep, fe, kb, cfg.knobs, roles, mana_series, real_max_hp,
             danger_names={c["ability"] for c in dangerous_casts},

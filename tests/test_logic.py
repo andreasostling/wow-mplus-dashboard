@@ -17,7 +17,9 @@ from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
 )
+from claudelogger.cli import _talent_entries_by_player
 from claudelogger.config import ACTIVE_ROSTER, BOSS_GUIDES, DUNGEON_SLUGS, Knobs, REPO_ROOT, ROSTER
+from claudelogger.defensives import PERSONAL_DEFENSIVES, owned_defensives
 from claudelogger.fetch import Actor, Fight, FightEvents, ReportData
 
 
@@ -310,6 +312,47 @@ class TestDefensiveTalentGating(unittest.TestCase):
 
     def test_knob_default_is_permissive(self):
         self.assertTrue(Knobs().defensive_baseline_without_talents)
+
+    def test_cd_economy_agrees_with_death_check(self):
+        # The cooldown panel and the death rows must resolve the same owned set, or the
+        # panel accuses a player of never pressing a button they don't have.
+        talents = {self.ICE_BLOCK, self.ICE_COLD}
+        owned = owned_defensives("Mage", talents, set(), baseline_without_talents=True)
+        names = {PERSONAL_DEFENSIVES[sid][0] for sid in owned}
+        self.assertIn("Ice Cold", names)
+        self.assertNotIn("Ice Block", names)
+        self.assertNotIn("Mirror Image", names)
+        self.assertEqual(names, set(self.assess(talents).available))
+
+
+class TestTalentEntryHarvest(unittest.TestCase):
+    """combatantInfo -> actor_id: entry ids. 'No data' and 'took nothing' must not be
+    conflated: an empty talentTree has to degrade to the baseline path."""
+
+    def test_entries_are_collected(self):
+        ev = [{"sourceID": 3, "talentTree": [{"id": 80181}, {"id": 80141}]}]
+        self.assertEqual(_talent_entries_by_player(ev), {3: {80181, 80141}})
+
+    def test_empty_talent_tree_is_unknown_not_empty(self):
+        for tt in ([], None):
+            with self.subTest(tt=tt):
+                out = _talent_entries_by_player([{"sourceID": 3, "talentTree": tt}])
+                self.assertNotIn(3, out)      # absent => _assess_defensives sees None
+                self.assertEqual(out, {})
+
+    def test_unknown_player_keeps_full_baseline(self):
+        # End to end: an empty talentTree must not prune the mage's kit.
+        mage = Actor(id=3, name="Gaddini", type="Player", sub_type="Mage")
+        harvested = _talent_entries_by_player([{"sourceID": 3, "talentTree": []}])
+        a = _assess_defensives(100000, mage, {3: []}, 100000, 10000, big_predictable=True,
+                               talent_entries=harvested.get(3))
+        self.assertIn("Ice Block", a.available)
+        self.assertIn("Mirror Image", a.available)
+
+    def test_malformed_entries_are_skipped(self):
+        ev = [{"sourceID": 3, "talentTree": [{"id": 80181}, {"no_id": 1}, "junk"]},
+              {"talentTree": [{"id": 999}]}]          # no sourceID
+        self.assertEqual(_talent_entries_by_player(ev), {3: {80181}})
 
 
 # --------------------------------------------------------------------------

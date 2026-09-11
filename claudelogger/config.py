@@ -69,6 +69,9 @@ class Knobs:
     # No combatantInfo on a fight => talents unknown: True keeps the coarse CLASS_BASELINE
     # (optimistic), False credits only defensives the player was actually seen casting.
     defensive_baseline_without_talents: bool = True
+    # A defensive cast within this window before death counts as still up at death
+    # (capped by its own cooldown), rather than as an unused one.
+    defensive_active_window_ms: int = 12_000
 
     # Confidence: empirical + curated agreement => high; single weak source => review.
     review_below_confidence: float = 0.5
