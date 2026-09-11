@@ -44,13 +44,20 @@ class Knobs:
     # un-healable, never attributed to the healer.
     oneshot_frac: float = 0.90
 
-    # Ground/persistent-area effect: this many ticks of the same ability from the
-    # same source within the window => "stood in it".
+    # Ground/persistent-area effect, "inferred" tier only: this many periodic ticks of
+    # the same ability from the same source within the death window before the
+    # no-debuff test is even considered. See ground_infer_periodic_no_debuff below.
     ground_min_ticks: int = 2
 
     # A contributing source must be at least this fraction of window damage to be
     # called a "meaningful contributor" in attribution.
     contributor_min_frac: float = 0.10
+
+    # A cause lever (interrupt / stun / ground) must explain at least this fraction of
+    # the death window's damage before it may name the death's cause bucket. Stop levers
+    # are tested against it first: per the counter taxonomy, a stop that clears this bar
+    # wins the bucket even when ground weight is higher (classify._decide_bucket).
+    bucket_min_lever_frac: float = 0.25
 
     # Healer "should have healed more" gate (all must hold):
     heal_more_hp_frac: float = 0.35      # target sat at/below this HP fraction...
@@ -66,6 +73,12 @@ class Knobs:
     defensive_dominant_frac: float = 0.5   # one ability is >= this share of lethal-window damage
     defensive_big_hp_frac: float = 0.5     # ...and dealt >= this fraction of max HP
     defensive_channel_min_ticks: int = 3   # a periodic source with >= this many ticks = a channel/DoT
+    # No combatantInfo on a fight => talents unknown: True keeps the coarse CLASS_BASELINE
+    # (optimistic), False credits only defensives the player was actually seen casting.
+    defensive_baseline_without_talents: bool = True
+    # A defensive cast within this window before death counts as still up at death
+    # (capped by its own cooldown), rather than as an unused one.
+    defensive_active_window_ms: int = 12_000
 
     # Confidence: empirical + curated agreement => high; single weak source => review.
     review_below_confidence: float = 0.5
@@ -134,6 +147,24 @@ class Knobs:
     wipe_gap_ms: int = 12_000
     wipe_min_players: int = 4
     wipe_keep: int = 2
+
+    # --- ground-effect detection + threat/pickup sub-kind (classify.py) -------------
+    # Ground detection runs in three labelled tiers, recorded per contribution as
+    # `levers.ground_evidence`: "environment" (WCL sourced it to the Environment),
+    # "curated" (knowledge.GROUND_EFFECT_ABILITIES / name fallback), and this
+    # "inferred" tier — NPC-sourced *periodic* damage with at least ground_min_ticks
+    # ticks in the death window and NO debuff of the same ability from that source on
+    # the victim (a pool ticks on you without debuffing you; a DoT debuffs you). It is
+    # the only guessing tier, so it is gated: set False to trust evidence only.
+    ground_infer_periodic_no_debuff: bool = True
+    # Threat/pickup split. The victim counts as having "pulled aggro" when the mob
+    # instance hit them at least this long before it ever meleed the tank in the same
+    # pull (or never meleed the tank there at all); tank-first-then-switched is a
+    # pickup failure instead.
+    threat_first_hit_lead_ms: int = 1500
+    # How far back of the victim's death a fixate aura still explains a melee death
+    # (a fixate makes it a mechanic, not a tank-aggro failure).
+    threat_fixate_lookback_ms: int = 25_000
 
 
 # Dungeon timers (seconds) — Midnight Season 2 M+.

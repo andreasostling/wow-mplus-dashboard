@@ -8,7 +8,7 @@ ClaudeLogger analyzes a fixed Mythic+ five-player group’s Warcraft Logs deaths
 - Secrets belong only in the git-ignored `.env`. Never commit or print the Warcraft Logs client secret.
 - Cache all external data under `cache/`: WCL GraphQL responses by query hash, MDT parses, Keystone routes, guides, and map tiles. Cached re-runs should be offline and rate-limit-friendly. Delete an individual cache item or use a loader’s `refresh=True` to refresh it.
 - Put every analysis threshold in `config.py:Knobs`; do not hard-code classifier thresholds.
-- For a fast cached loop, use `python -m claudelogger report LZBgMVX3yrf26CKP --fight 3` (Nexus-Point Xenas +12). Do not run a full `season` merely to test a focused change.
+- For a fast cached loop, use `python -m claudelogger report qTPgY3v4rLzbWVct` (current roster; four clean runs, 31 deaths, every fight has `combatantInfo`; about 2 s from cache). Add `--fight 7` (The Blinding Vale +9, 21 deaths) when one run is enough; narrowing is for signal, not speed. The older `LZBgMVX3yrf26CKP --fight 3` log is a pre-Season-2 party (Chibes / Decayheat / Invarianten), so `analyze_report`'s clean-5-stack gate now skips it and the loop prints an empty season summary that looks like "no regression". Do not run a full `season` merely to test a focused change. Two cautions: `report` rewrites the tracked `docs/index.html`, so revert it unless you intend to publish; and the guides, MDT, Keystone route and spell-category caches refresh on their own schedule, so the first run after a refresh is slow and can change bucket counts. Compare a before/after within the same cache state.
 - Outputs live in `out/`: `analysis.json` is the source of truth; `dashboard.html` is self-contained; `dashboard_artifact.html` is content-only; briefings are in `out/briefings/`; SimC artifacts are in `out/simc/` and `out/simc_analysis.json`.
 - The task queue is [docs/tasks/](docs/tasks/). Each file must be self-contained; delete it in the same change that completes it. Follow [docs/tasks/README.md](docs/tasks/README.md).
 
@@ -24,7 +24,7 @@ python -m claudelogger simc [--dungeon "Xenas"] [--no-sim]
 python -m compileall -q claudelogger
 ```
 
-For the cached SimC loop, always use `--report LZBgMVX3yrf26CKP --fight 3`: it contains `combatantInfo`; fight 4 does not. Ordinary Python and test commands can run from Windows. SimC currently must run through WSL from the Windows checkout so its Unix binary and reference profiles resolve:
+For the cached SimC loop, keep using `--report LZBgMVX3yrf26CKP --fight 3`. The two loops use different reports on purpose: `simc` bypasses the roster gate, that fight has `combatantInfo` (fight 4 does not), and Nexus-Point Xenas has a route export in `routes/simc/`. The death-analysis report `qTPgY3v4rLzbWVct` has `combatantInfo` in all four fights, but its Season 2 dungeons have no route SimC fixtures yet, so it cannot drive the route merge. Ordinary Python and test commands can run from Windows. SimC currently must run through WSL from the Windows checkout so its Unix binary and reference profiles resolve:
 
 ```sh
 wsl.exe bash -lc 'cd /mnt/c/GitHub/ClaudeLogger && python3 -m claudelogger simc --report LZBgMVX3yrf26CKP --fight 3'

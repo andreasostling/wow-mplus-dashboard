@@ -124,6 +124,26 @@ def _comp_cc_labels(kb: knowledge.AbilityKnowledge) -> dict[str, list[str]]:
     return {"interrupts": sorted(interrupts), "stuns": sorted(stuns), "other_cc": sorted(other)}
 
 
+def _talent_entries_by_player(combatant_events: list[dict]) -> dict[int, set[int]]:
+    """actor_id -> the TraitNodeEntryIDs that player took, from WCL combatantInfo.
+
+    A player is only listed when WCL actually gave us entries. A missing or EMPTY
+    talentTree means "we don't know", not "they took no talents" — listing them with an
+    empty set would read downstream as "owns nothing" and prune their whole kit, so they
+    are omitted and fall back to the baseline path instead.
+    """
+    out: dict[int, set[int]] = {}
+    for ci in combatant_events:
+        aid = ci.get("sourceID")
+        tt = ci.get("talentTree")
+        if aid is None or not isinstance(tt, list):
+            continue
+        entries = {t["id"] for t in tt if isinstance(t, dict) and t.get("id") is not None}
+        if entries:
+            out[aid] = entries
+    return out
+
+
 def analyze_report(
     client: WCLClient, cfg: Config, code: str, only_fight: int | None,
     mdt_facts: dict | None = None,
@@ -181,9 +201,17 @@ def analyze_report(
         real_max_hp = _log_entry["player_max_hp"] if _log_entry else {}
         # Very dangerous casts (empirical, from damage taken) — feeds death tagging + briefing.
         dangerous_casts = danger.analyze(fe, rep, set(fight.friendly_players), real_max_hp, cfg.knobs)
+        # Talents: WCL combatantInfo carries each player's talentTree as TraitNodeEntryIDs.
+        # Feeds both the death defensive check (which defensives they actually have) and
+        # the offensive never/rarely-pressed warning. Present only on some fights — when
+        # absent, each consumer falls back (Knobs / the CD's `core` flag). Disk-cached, so
+        # fetching it this early costs nothing on a cached re-run.
+        talent_entries_by_player = _talent_entries_by_player(
+            fetch.fetch_combatant_info(client, code, fight))
         findings, pull_tallies = classify_fight(
             rep, fe, kb, cfg.knobs, roles, mana_series, real_max_hp,
             danger_names={c["ability"] for c in dangerous_casts},
+            talent_entries_by_player=talent_entries_by_player,
         )
         party = [
             {"name": a.name, "role": roles.get(a.id, ("dps", ""))[0],
@@ -216,18 +244,6 @@ def analyze_report(
             fetch.fetch_buffs(client, code, fight, tank_id, {cd_economy.SHUFFLE_AURA})
             if tank_id is not None else []
         )
-        # Talents (for the offensive never/rarely-pressed warning): WCL combatantInfo
-        # carries each player's talentTree as TraitNodeEntryIDs. Present only on some
-        # fights — when absent, the warning falls back to each CD's `core` flag.
-        talent_entries_by_player: dict[int, set[int]] = {}
-        for ci in fetch.fetch_combatant_info(client, code, fight):
-            aid = ci.get("sourceID")
-            tt = ci.get("talentTree")
-            if aid is None or not isinstance(tt, list):
-                continue
-            talent_entries_by_player[aid] = {
-                t["id"] for t in tt if isinstance(t, dict) and t.get("id") is not None
-            }
         cdecon = cd_economy.analyze_cd_economy(
             fight, fe, rep, roles, findings, timing["combat_s"], cfg.knobs, shuffle_buffs,
             talent_entries_by_player=talent_entries_by_player,

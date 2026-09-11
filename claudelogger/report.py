@@ -752,7 +752,7 @@ _HTML = r"""<!doctype html>
 <title>Mythic+ Team Dashboard</title>
 <style>
   :root{--bg:#0f1115;--card:#171a21;--ink:#e7e9ee;--mut:#9aa3b2;--line:#262b36;
-        --bad:#ff5d5d;--ok:#46d39a;--warn:#ffb454;--accent:#6aa3ff;}
+        --bad:#ff5d5d;--ok:#46d39a;--warn:#ffb454;--accent:#6aa3ff;--fire:#ff8a3d;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
   .wrap{max-width:1100px;margin:0 auto;padding:24px}
@@ -773,7 +773,7 @@ _HTML = r"""<!doctype html>
   table.kv td{color:var(--ink)}
   .pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600}
   .b-interrupt{background:#3a2c12;color:var(--warn)} .b-stun{background:#3a1f1f;color:var(--bad)}
-  .b-ground{background:#123a2c;color:var(--ok)} .b-oneshot{background:#222;color:var(--mut)}
+  .b-ground{background:#3a2413;color:var(--fire)} .b-oneshot{background:#222;color:var(--mut)}
   .b-other{background:#1d2530;color:var(--accent)}
   .av-yes{color:var(--bad);font-weight:700} .av-no{color:var(--ok)} .av-null{color:var(--mut)}
   .bars{display:flex;flex-direction:column;gap:3px}
@@ -792,7 +792,14 @@ _HTML = r"""<!doctype html>
   select,input{background:var(--card);color:var(--ink);border:1px solid var(--line);
                border-radius:7px;padding:6px 8px}
   .contrib{color:var(--mut);font-size:12px}
-  .lever{color:var(--warn)} .muted{color:var(--mut)}
+  .lever{color:var(--warn);font-weight:600} .muted{color:var(--mut)}
+  /* "Stood in it" is its own lever (avoid), so it gets its own fire colour instead of
+     hiding inside the muted contribution text. Kick/stun keep --warn at the same
+     weight so the stop levers never read as less important than avoidance. */
+  .lever-ground{color:var(--fire);font-weight:600}
+  .contrib .g-abil{color:var(--fire)}
+  .subtag{display:inline-block;margin-left:4px;padding:0 5px;border-radius:4px;font-size:10px;
+          font-weight:600;background:var(--card);border:1px solid var(--line);color:var(--mut)}
   a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
   .brief-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:0 0 14px}
   .brief-cards .card{padding:10px} .brief-cards .card .n{font-size:20px} .brief-cards .card .l{font-size:11px}
@@ -1374,9 +1381,25 @@ function render(){
     const [lbl,cls]=bucketLabel[d.bucket]||[d.bucket,'b-other'];
     const contrib=d.contributions.map(c=>{
       const lev=[]; if(c.levers.interruptible)lev.push('kick'); if(c.levers.stun_stoppable)lev.push('stun');
-      if(c.levers.ground_effect)lev.push('ground');
-      return `${Math.round(c.pct*100)}% ${esc(c.ability)} <span class="muted">(${esc(c.source)})</span>`+
-        (lev.length?` <span class="lever">[${lev.join('/')}]</span>`:'');}).join('<br>');
+      // Ground effects get their own fire-coloured line + badge: "you were standing in it"
+      // is a different instruction from "someone should have kicked it".
+      // But never both on one line: stop > avoid, so when this contribution has a stop
+      // lever the instruction is the stop, and the fire treatment is suppressed.
+      const gnd=!!c.levers.ground_effect&&!lev.length, ev=c.levers.ground_evidence||'';
+      const gtip=ev==='inferred'?'inferred ground effect (periodic damage with no matching debuff) — move out'
+                :ev==='curated'?'known ground effect — move out'
+                :ev==='environment'?'environmental ground damage — move out':'ground effect — move out';
+      return `${Math.round(c.pct*100)}% <span class="${gnd?'g-abil':''}">${esc(c.ability)}</span> `+
+        `<span class="${gnd?'g-abil':'muted'}">(${esc(c.source)})</span>`+
+        (lev.length?` <span class="lever">[${lev.join('/')}]</span>`:'')+
+        (gnd?` <span class="lever-ground" title="${esc(gtip)}">[stood in]</span>`:'');}).join('<br>');
+    // Threat sub-kind beside the pill. "tank down" is not a verdict on anyone — it says
+    // the death was never judged on threat, because no tank was alive to hold anything.
+    const tkLbl={pulled_aggro:'pulled aggro',tank_pickup:'not picked up',
+                 tank_dead:'tank down'}[d.threat_kind]||'';
+    const tkTip=d.threat_kind==='tank_dead'
+      ?'no tank was alive here — melee on a non-tank is not a pickup failure; see the notes'
+      :'threat sub-kind';
     const av=d.avoidable===true?'<span class="av-yes">yes</span>':
              d.avoidable===false?'<span class="av-no">no</span>':'<span class="av-null">?</span>';
     const hv=d.healer.verdict;
@@ -1395,7 +1418,7 @@ function render(){
     const wclUrl = `https://www.warcraftlogs.com/reports/${encodeURIComponent(d.report)}`;
     tb.append(el(`<tr><td><a href="${wclUrl}" target="_blank" rel="noopener" title="Open on WCL">${esc(d.dungeon)} +${d.key}</a></td><td>${esc(d.player)}</td><td>${esc(d.role)}</td>
       <td>${d.time_in_fight_s}</td><td>${esc(d.killer)}${d.dangerous_cast?` <span class="av-yes" title="died to a flagged high-damage cast: ${esc(d.dangerous_cast)}">💥</span>`:''}</td>
-      <td><span class="pill ${cls}">${esc(lbl)}</span>${d.one_shot?' <span class="muted">one-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑ wipe trigger</span>':''}${d.is_cascade?' <span class="muted">follow-on</span>':''}</td>
+      <td><span class="pill ${cls}">${esc(lbl)}</span>${tkLbl?`<span class="subtag" title="${esc(tkTip)}">${tkLbl}</span>`:''}${d.one_shot?' <span class="muted">one-shot</span>':''}${d.wipe_trigger?' <span class="lever">⚑ wipe trigger</span>':''}${d.is_cascade?' <span class="muted">follow-on</span>':''}</td>
       <td>${av}</td><td>${d.confidence}</td><td class="contrib">${contrib||'<span class=muted>—</span>'}</td>
       <td>${heal}</td><td class="contrib">${def}</td></tr>`));
   });

@@ -17,7 +17,9 @@ from claudelogger.classify import (
     Contribution, _assess_defensives, _decide_bucket, _healer_cc_intervals,
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
 )
+from claudelogger.cli import _talent_entries_by_player
 from claudelogger.config import ACTIVE_ROSTER, BOSS_GUIDES, DUNGEON_SLUGS, Knobs, REPO_ROOT, ROSTER
+from claudelogger.defensives import PERSONAL_DEFENSIVES, owned_defensives
 from claudelogger.fetch import Actor, Fight, FightEvents, ReportData
 
 
@@ -124,8 +126,10 @@ class TestDecideBucket(unittest.TestCase):
         self.assertGreater(conf, 0.9)
 
     def test_ground_lever(self):
+        # is_ground always travels with the tier that proved it (here: environment).
         b, av, _, _ = _decide_bucket(
-            [contrib(pct=0.7, is_ground=True, is_environment=True, source_name="Environment")],
+            [contrib(pct=0.7, is_ground=True, ground_evidence="environment",
+                     is_environment=True, source_name="Environment")],
             False, 100000)
         self.assertEqual(b, classify.GROUND)
 
@@ -233,6 +237,124 @@ class TestAssessDefensives(unittest.TestCase):
         casts = {1: [], 2: [{"abilityGameID": 102342, "timestamp": 0}]}
         a = _assess_defensives(100000, self.monk, casts, 100000, 5000, big_predictable=True)
         self.assertIn("Ironbark", a.externals_available)
+
+
+# --------------------------------------------------------------------------
+# defensive availability keyed off the player's real talents
+# --------------------------------------------------------------------------
+class TestDefensiveTalentGating(unittest.TestCase):
+    """`CLASS_BASELINE` is only the no-talent-data fallback. When WCL gives us a
+    talentTree, availability must follow it: entry ids observed on the cached Xenas +12
+    run (Gaddini = Ice Block 80181 + Ice Cold 80141, no Mirror Image 80183)."""
+
+    ICE_BLOCK, ICE_COLD, MIRROR_IMAGE = 80181, 80141, 80183
+
+    def setUp(self):
+        self.mage = Actor(id=1, name="Gaddini", type="Player", sub_type="Mage")
+
+    def assess(self, talents, casts=None, death_ts=100000, **kw):
+        return _assess_defensives(
+            death_ts, self.mage, {1: casts or []}, 100000, 10000,
+            big_predictable=True, talent_entries=talents, **kw,
+        )
+
+    def test_ice_cold_talent_replaces_ice_block(self):
+        # Ice Cold is a modifier ON Ice Block: both entries present => ONE button, and
+        # it is Ice Cold (70% DR), never the Ice Block immunity.
+        a = self.assess({self.ICE_BLOCK, self.ICE_COLD})
+        self.assertIn("Ice Cold", a.available)
+        self.assertNotIn("Ice Block", a.available)
+
+    def test_untalented_ice_block_and_mirror_image_are_dropped(self):
+        # Neither mage talent taken -> the class baseline must not credit either.
+        a = self.assess(set())
+        self.assertNotIn("Ice Block", a.available)
+        self.assertNotIn("Mirror Image", a.available)
+        self.assertEqual(a.would_have_saved, [])
+
+    def test_talented_ice_block_without_ice_cold_stays_ice_block(self):
+        a = self.assess({self.ICE_BLOCK})
+        self.assertIn("Ice Block", a.available)
+        self.assertNotIn("Ice Cold", a.available)
+
+    def test_talented_extras_are_added_not_just_pruned(self):
+        # Mirror Image isn't reachable from the baseline alone here — it has to come
+        # from the talent entry itself.
+        a = self.assess({self.MIRROR_IMAGE})
+        self.assertIn("Mirror Image", a.available)
+
+    def test_no_talent_data_keeps_baseline_by_default(self):
+        # knob True (default): unchanged legacy behaviour for combatantInfo-less fights.
+        a = self.assess(None, baseline_without_talents=True)
+        self.assertIn("Ice Block", a.available)
+        self.assertIn("Mirror Image", a.available)
+
+    def test_no_talent_data_drops_gated_when_knob_false(self):
+        a = self.assess(None, baseline_without_talents=False)
+        self.assertNotIn("Ice Block", a.available)
+        self.assertNotIn("Mirror Image", a.available)
+
+    def test_observed_cast_beats_missing_talent(self):
+        # A real cast proves possession even when the talent table says otherwise.
+        # Mirror Image (120s CD) cast at t=0, death at 500s -> long off cooldown.
+        casts = [{"abilityGameID": 55342, "timestamp": 0}]
+        a = self.assess(set(), casts=casts, death_ts=500000)
+        self.assertIn("Mirror Image", a.available)
+        # ...and the same cast survives the knob-False path too.
+        b = self.assess(None, casts=casts, death_ts=500000, baseline_without_talents=False)
+        self.assertIn("Mirror Image", b.available)
+
+    def test_observed_ice_cold_cast_replaces_ice_block_without_talents(self):
+        # 414658 in the Casts stream is the Ice Cold button; the mage cannot also have
+        # Ice Block. Holds even on a fight with no combatantInfo.
+        casts = [{"abilityGameID": 414658, "timestamp": 495000}]   # 5s before death
+        a = self.assess(None, casts=casts, death_ts=500000, baseline_without_talents=True)
+        self.assertNotIn("Ice Block", a.available)
+        self.assertIn("Ice Cold", a.active_at_death)
+
+    def test_knob_default_is_permissive(self):
+        self.assertTrue(Knobs().defensive_baseline_without_talents)
+
+    def test_cd_economy_agrees_with_death_check(self):
+        # The cooldown panel and the death rows must resolve the same owned set, or the
+        # panel accuses a player of never pressing a button they don't have.
+        talents = {self.ICE_BLOCK, self.ICE_COLD}
+        owned = owned_defensives("Mage", talents, set(), baseline_without_talents=True)
+        names = {PERSONAL_DEFENSIVES[sid][0] for sid in owned}
+        self.assertIn("Ice Cold", names)
+        self.assertNotIn("Ice Block", names)
+        self.assertNotIn("Mirror Image", names)
+        self.assertEqual(names, set(self.assess(talents).available))
+
+
+class TestTalentEntryHarvest(unittest.TestCase):
+    """combatantInfo -> actor_id: entry ids. 'No data' and 'took nothing' must not be
+    conflated: an empty talentTree has to degrade to the baseline path."""
+
+    def test_entries_are_collected(self):
+        ev = [{"sourceID": 3, "talentTree": [{"id": 80181}, {"id": 80141}]}]
+        self.assertEqual(_talent_entries_by_player(ev), {3: {80181, 80141}})
+
+    def test_empty_talent_tree_is_unknown_not_empty(self):
+        for tt in ([], None):
+            with self.subTest(tt=tt):
+                out = _talent_entries_by_player([{"sourceID": 3, "talentTree": tt}])
+                self.assertNotIn(3, out)      # absent => _assess_defensives sees None
+                self.assertEqual(out, {})
+
+    def test_unknown_player_keeps_full_baseline(self):
+        # End to end: an empty talentTree must not prune the mage's kit.
+        mage = Actor(id=3, name="Gaddini", type="Player", sub_type="Mage")
+        harvested = _talent_entries_by_player([{"sourceID": 3, "talentTree": []}])
+        a = _assess_defensives(100000, mage, {3: []}, 100000, 10000, big_predictable=True,
+                               talent_entries=harvested.get(3))
+        self.assertIn("Ice Block", a.available)
+        self.assertIn("Mirror Image", a.available)
+
+    def test_malformed_entries_are_skipped(self):
+        ev = [{"sourceID": 3, "talentTree": [{"id": 80181}, {"no_id": 1}, "junk"]},
+              {"talentTree": [{"id": 999}]}]          # no sourceID
+        self.assertEqual(_talent_entries_by_player(ev), {3: {80181}})
 
 
 # --------------------------------------------------------------------------
@@ -700,6 +822,281 @@ class TestMissedCooldownUses(unittest.TestCase):
         self.assertFalse(short["track_missed"])
         self.assertTrue(long["track_missed"])
         self.assertEqual(long["missed"], 2.0)
+
+
+# --------------------------------------------------------------------------
+# ground-effect tiers + threat/pickup sub-kind
+# --------------------------------------------------------------------------
+_GROUND_ABILITIES = {
+    1: "Melee", 70: "Void Sludge", 71: "Some Vendor Name", 72: "Shadow Bolt",
+    73: "Consecration", 1244672: "Nullzone",
+}
+
+
+def _dm(ts, src, tgt, ab=1, amount=10000, inst=0, **kw):
+    e = {"timestamp": ts, "sourceID": src, "targetID": tgt, "abilityGameID": ab,
+         "amount": amount, "sourceInstance": inst}
+    e.update(kw)
+    return e
+
+
+class TestGroundEvidenceTiers(unittest.TestCase):
+    """is_ground now has three labelled tiers; a guess must never look like evidence."""
+
+    def _rep(self):
+        return ReportData(
+            code="X", title="", start_time=0, end_time=100000, zone_id=0, zone_name="",
+            fights=[], ability_names=dict(_GROUND_ABILITIES),
+            actors={a.id: a for a in [
+                Actor(2, "Neutronflux", "Player", "Evoker"),
+                Actor(10, "Bruiser", "NPC", "", game_id=500),
+            ]},
+        )
+
+    def _attr(self, window, knobs=None, debuffs=None):
+        rep = self._rep()
+        return classify._attribute(window, rep.actors, rep, knowledge.AbilityKnowledge(),
+                                   knobs or Knobs(), debuffs or set())
+
+    def test_curated_name_keyword_matches(self):
+        self.assertTrue(knowledge.is_ground_effect(0, "Void Sludge"))
+        self.assertTrue(knowledge.is_ground_effect(0, "Suppression Field"))
+        self.assertTrue(knowledge.is_ground_effect(0, "Blazing Ground"))
+        self.assertTrue(knowledge.is_ground_effect(1244672, "Some Vendor Name"))  # curated id
+        # Deliberately narrow: generic damage names and "Ground" as a prefix stay out.
+        self.assertFalse(knowledge.is_ground_effect(0, "Shadow Bolt"))
+        self.assertFalse(knowledge.is_ground_effect(0, "Fire Breath"))
+        self.assertFalse(knowledge.is_ground_effect(0, "Ground Skimming"))
+        self.assertFalse(knowledge.is_ground_effect(0, None))
+
+    def test_curated_tier_labels_mob_placed_pool(self):
+        c = self._attr([_dm(1000, 10, 2, ab=70), _dm(2000, 10, 2, ab=70)])[0]
+        self.assertTrue(c.is_ground)
+        self.assertEqual(c.ground_evidence, "curated")
+        # A curated id whose name gives nothing away still resolves.
+        c2 = self._attr([_dm(1000, 10, 2, ab=1244672)])[0]
+        self.assertEqual(c2.ground_evidence, "curated")
+
+    def test_environment_tier_still_wins(self):
+        c = self._attr([_dm(1000, -1, 2, ab=72)])[0]
+        self.assertTrue(c.is_ground)
+        self.assertEqual(c.ground_evidence, "environment")
+
+    def test_player_sourced_ground_is_never_blamed(self):
+        rep = self._rep()
+        rep.actors[3] = Actor(3, "Gaddini", "Player", "Mage")
+        c = classify._attribute([_dm(1000, 3, 2, ab=70)], rep.actors, rep,
+                                knowledge.AbilityKnowledge(), Knobs(), set())[0]
+        self.assertFalse(c.is_ground)        # a teammate's floor is not the lever
+        self.assertIsNone(c.ground_evidence)
+        self.assertTrue(c.is_self_or_friendly)
+
+    def test_inferred_tier_needs_ticks_and_no_debuff(self):
+        ticks = [_dm(t, 10, 2, ab=72, tick=True) for t in (1000, 2000, 3000)]
+        c = self._attr(ticks)[0]
+        self.assertTrue(c.is_ground)
+        self.assertEqual(c.ground_evidence, "inferred")
+        # Same ability debuffed the victim from that source => it's a DoT, not a floor.
+        self.assertIsNone(self._attr(ticks, debuffs={(10, 72)})[0].ground_evidence)
+        # One tick is below Knobs.ground_min_ticks.
+        self.assertIsNone(self._attr([_dm(1000, 10, 2, ab=72, tick=True)])[0].ground_evidence)
+        # Non-periodic damage is never inferred ground.
+        self.assertIsNone(self._attr([_dm(t, 10, 2, ab=72) for t in (1000, 2000, 3000)])[0].ground_evidence)
+        # And the whole tier is knob-gated off.
+        off = Knobs(ground_infer_periodic_no_debuff=False)
+        self.assertIsNone(self._attr(ticks, knobs=off)[0].ground_evidence)
+
+    def test_inferred_ground_never_sets_the_bucket(self):
+        # The guessing tier keeps its per-contribution badge but must not name a cause.
+        inferred = contrib(pct=0.7, is_ground=True, ground_evidence="inferred",
+                           ability_name="Creeping Murk")
+        curated = contrib(pct=0.7, is_ground=True, ground_evidence="curated",
+                          ability_name="Creeping Murk")
+        b1, _, _c1, _ = _decide_bucket([inferred], False, 100000)
+        b2, _, _c2, notes = _decide_bucket([curated], False, 100000)
+        self.assertNotEqual(b1, classify.GROUND)
+        self.assertEqual(b2, classify.GROUND)
+        self.assertIn("curated", notes[0])
+        self.assertTrue(inferred.is_ground)      # the badge survives
+        # Mixed: only the evidence-backed share counts toward the ground weight, and the
+        # note reports that tier alone rather than advertising the guess as evidence.
+        small = contrib(pct=0.3, is_ground=True, ground_evidence="curated")
+        big = contrib(pct=0.6, is_ground=True, ground_evidence="inferred")
+        b3, _, _c3, notes3 = _decide_bucket([big, small], False, 100000)
+        self.assertEqual(b3, classify.GROUND)
+        self.assertIn("curated", notes3[0])
+        self.assertNotIn("inferred", notes3[0])
+
+    def test_pet_sourced_zone_is_never_flagged(self):
+        rep = self._rep()
+        rep.actors[5] = Actor(5, "Ebonhorn", "Pet", "Hunter")
+        ticks = [_dm(t, 5, 2, ab=72, tick=True) for t in (1000, 2000, 3000)]
+        c = classify._attribute(ticks, rep.actors, rep, knowledge.AbilityKnowledge(),
+                                Knobs(), set())[0]
+        self.assertFalse(c.is_ground)            # a friendly pet's zone is not the lever
+        self.assertIsNone(c.ground_evidence)
+        # Not even the curated tier: a pet is rejected before the id/name fallback.
+        c2 = classify._attribute([_dm(1000, 5, 2, ab=70)], rep.actors, rep,
+                                 knowledge.AbilityKnowledge(), Knobs(), set())[0]
+        self.assertFalse(c2.is_ground)
+
+    def test_ground_flag_does_not_mute_the_stun_lever(self):
+        # Stop > avoid: a stoppable cast that also leaves a pool must still read as a stop.
+        c = contrib(pct=0.8, is_ground=True, ground_evidence="curated",
+                    stunnable=True, stunnable_src="observed")
+        self.assertTrue(classify._stun_stoppable(c))
+        self.assertEqual(_decide_bucket([c], False, 100000)[0], classify.STUN)
+
+    def test_a_stop_lever_beats_heavier_ground_weight_elsewhere(self):
+        # The live case: curated ground on one contribution (0.67) plus environment
+        # ground on another (0.13) out-weighed a 0.67 stun lever on a *third* and flipped
+        # the bucket to GROUND. Stop > avoid — the stop wins whenever it clears the bar.
+        stun = contrib(source_id=10, pct=0.67, ability_name="Gloom Wave",
+                       stunnable=True, stunnable_src="observed")
+        ground = contrib(source_id=11, pct=0.67, ability_name="Suppression Field",
+                         is_ground=True, ground_evidence="curated")
+        env = contrib(source_id=-1, pct=0.13, is_environment=True, is_ground=True,
+                      ground_evidence="environment", source_name="Environment")
+        self.assertEqual(_decide_bucket([ground, stun, env], False, 100000)[0], classify.STUN)
+        kick = contrib(source_id=10, pct=0.3, ability_name="Mend",
+                       interruptible=True, interruptible_src="observed")
+        self.assertEqual(_decide_bucket([ground, kick, env], False, 100000)[0], classify.INTERRUPT)
+        # ...but a stop lever below the bar must not steal the bucket from real ground.
+        weak = contrib(source_id=10, pct=0.1, ability_name="Mend",
+                       interruptible=True, interruptible_src="observed")
+        self.assertEqual(_decide_bucket([ground, weak], False, 100000)[0], classify.GROUND)
+
+
+class TestThreatGuardAndKind(unittest.TestCase):
+    """A melee death is only a pickup failure when a tank was actually alive to tank."""
+
+    TANK, VICTIM, TANK2, MOB = 1, 2, 4, 10
+
+    def _run(self, *, tank_deaths=(), casts=(), tank_melee=(), victim_melee=None,
+             two_tanks=False):
+        actors = [
+            Actor(self.TANK, "Cybop", "Player", "Paladin"),
+            Actor(self.VICTIM, "Neutronflux", "Player", "Evoker"),
+            Actor(self.MOB, "Bruiser", "NPC", "", game_id=500),
+        ]
+        roles = {self.TANK: ("tank", "Protection"), self.VICTIM: ("dps", "Devastation")}
+        if two_tanks:
+            actors.append(Actor(self.TANK2, "Cybopalt", "Player", "Warrior"))
+            roles[self.TANK2] = ("tank", "Protection")
+        rep = ReportData(
+            code="X", title="", start_time=0, end_time=100000, zone_id=0, zone_name="",
+            fights=[], ability_names=dict(_GROUND_ABILITIES),
+            actors={a.id: a for a in actors},
+        )
+        victim_melee = list(victim_melee if victim_melee is not None else range(2000, 15000, 1000))
+        dmg = [_dm(t, self.MOB, self.TANK, inst=7) for t in tank_melee]
+        dmg += [_dm(t, self.MOB, self.VICTIM, inst=7) for t in victim_melee]
+        dmg.append(_dm(15000, self.MOB, self.VICTIM, inst=7, overkill=5000))
+        dmg.sort(key=lambda e: e["timestamp"])
+        deaths = [{"targetID": self.TANK, "timestamp": t, "killerID": self.MOB,
+                   "killingAbilityGameID": 1} for t in tank_deaths]
+        deaths.append({"targetID": self.VICTIM, "timestamp": 15000, "killerID": self.MOB,
+                       "killingAbilityGameID": 1})
+        fe = FightEvents(fight=fight(friendly_players=[a.id for a in actors if a.is_player]),
+                         events={"Deaths": deaths, "DamageTaken": dmg, "Healing": [],
+                                 "Casts": list(casts), "Interrupts": [], "Debuffs": []})
+        findings, _ = classify.classify_fight(
+            rep, fe, knowledge.AbilityKnowledge(), Knobs(), roles)
+        return next(f for f in findings if f.player == "Neutronflux")
+
+    def test_tank_dead_before_victim_is_not_a_pickup_failure(self):
+        f = self._run(tank_deaths=(10000,))
+        self.assertNotEqual(f.bucket, classify.OFF_TANK_MELEE)
+        # The guard is visible in the data, not only in a note the dashboard never reads.
+        self.assertEqual(f.threat_kind, "tank_dead")
+        self.assertTrue(any("Cybop was already dead 5.0s earlier" in n for n in f.notes),
+                        f.notes)
+
+    def test_a_tank_dying_in_the_same_millisecond_still_counts_as_alive(self):
+        # They were standing when the lethal damage landed; the shared timestamp must
+        # not wave away a real pickup failure.
+        f = self._run(tank_deaths=(15000,), tank_melee=(2000, 3000, 4000),
+                      victim_melee=range(9000, 15000, 1000))
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertEqual(f.threat_kind, "tank_pickup")
+
+    def test_battle_res_lifts_the_guard(self):
+        f = self._run(tank_deaths=(10000,),
+                      casts=[{"type": "cast", "timestamp": 12000, "abilityGameID": 20271,
+                              "sourceID": self.TANK}])
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertIsNotNone(f.threat_kind)
+
+    def test_a_cast_before_the_death_does_not_lift_the_guard(self):
+        f = self._run(tank_deaths=(10000,),
+                      casts=[{"type": "cast", "timestamp": 9000, "abilityGameID": 20271,
+                              "sourceID": self.TANK}])
+        self.assertNotEqual(f.bucket, classify.OFF_TANK_MELEE)
+
+    def test_second_tank_alive_means_the_guard_does_not_fire(self):
+        f = self._run(tank_deaths=(10000,), two_tanks=True)
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+
+    def test_pulled_aggro_when_the_mob_reached_the_victim_first(self):
+        f = self._run(tank_melee=(9000,))
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertEqual(f.threat_kind, "pulled_aggro")
+        self.assertEqual(f.confidence, 0.7)          # tanked in this pull
+        self.assertTrue(any("pulled aggro" in n for n in f.notes), f.notes)
+
+    def test_tank_pickup_when_the_tank_had_it_first(self):
+        f = self._run(tank_melee=(2000, 3000, 4000),
+                      victim_melee=range(9000, 15000, 1000))
+        self.assertEqual(f.bucket, classify.OFF_TANK_MELEE)
+        self.assertEqual(f.threat_kind, "tank_pickup")
+        self.assertTrue(any("not picked up" in n for n in f.notes), f.notes)
+
+    def test_tank_never_meleed_by_this_instance_is_pulled_aggro(self):
+        f = self._run()                               # tank takes nothing at all
+        self.assertEqual(f.threat_kind, "pulled_aggro")
+        self.assertEqual(f.confidence, 0.5)           # never tanked => lower confidence
+
+    # ---- _threat_kind in isolation: evidence bounds and the ordering band ----------
+    def _kind(self, *, tank_hits=(), victim_hits=(2000,), death_ts=15000, pull_index=0):
+        """(tanked, kind) for one mob copy (inst 7) with these tank/victim melee stamps."""
+        top = contrib(source_id=self.MOB, ability_id=1, ability_name="Melee")
+        dmg = [_dm(t, self.MOB, self.VICTIM, inst=7) for t in sorted(victim_hits)]
+        mmt = {(pull_index, self.MOB, 7): sorted(tank_hits)} if tank_hits else {}
+        return classify._threat_kind(
+            top, dmg, dmg, [pulls.Pull(index=0, start_ms=0, end_ms=30000)],
+            pull_index, mmt, death_ts, Knobs())
+
+    def test_no_pull_is_unknown_not_pulled_aggro(self):
+        # The tank-side lookup is keyed by pull, so with no pull it can only ever come
+        # back empty — which is not evidence that the tank never had the mob.
+        self.assertEqual(self._kind(pull_index=None), (False, "unknown"))
+        self.assertEqual(self._kind(pull_index=None, tank_hits=(1000,)), (False, "unknown"))
+
+    def test_victim_never_meleed_by_this_copy_is_unknown(self):
+        self.assertEqual(self._kind(victim_hits=(), tank_hits=(1000,))[1], "unknown")
+
+    def test_tank_melee_after_the_death_is_not_evidence(self):
+        # A tank picking the mob up 2.4s *after* the victim died neither proves the mob
+        # was tanked here nor lengthens the pulled-aggro lead.
+        self.assertEqual(self._kind(tank_hits=(17400,)), (False, "pulled_aggro"))
+        # A stamp before the death is evidence, and flips the reading.
+        self.assertEqual(self._kind(tank_hits=(400,)), (True, "tank_pickup"))
+
+    def test_first_hit_band_applies_in_both_directions(self):
+        lead = Knobs().threat_first_hit_lead_ms
+        # Victim first, but inside the band => too close to call.
+        self.assertEqual(self._kind(victim_hits=(10000,), tank_hits=(10001,))[1], "unknown")
+        # Tank first by 1ms is just as inconclusive — it used to read tank_pickup.
+        self.assertEqual(self._kind(victim_hits=(10001,), tank_hits=(10000,))[1], "unknown")
+        # Clear of the band on either side, the ordering means something again.
+        self.assertEqual(self._kind(victim_hits=(10000,), tank_hits=(10000 + lead,))[1],
+                         "pulled_aggro")
+        self.assertEqual(self._kind(victim_hits=(10000 + lead,), tank_hits=(10000,))[1],
+                         "tank_pickup")
+
+    def test_tank_alive_helper_handles_a_roster_with_no_tank(self):
+        # "We can't identify a tank" must not silently suppress every threat finding.
+        self.assertTrue(classify._tank_alive_at(100, set(), {}, {}))
 
 
 if __name__ == "__main__":
