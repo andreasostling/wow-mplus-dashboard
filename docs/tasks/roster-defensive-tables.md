@@ -1,4 +1,4 @@
-# Add Paladin, Evoker and Shaman personal defensives to the defensive tables
+# Add Paladin, Evoker, Shaman and Death Knight personal defensives to the defensive tables
 
 **Why:** Three of the five current roster members (Cybop / Protection Paladin, Neutronflux /
 Devastation Evoker, Konstanten / Restoration Shaman) have no rows at all in
@@ -6,7 +6,9 @@ Devastation Evoker, Konstanten / Restoration Shaman) have no rows at all in
 one of their deaths shows `available: []` and no defensive is ever credited, missed, or
 proposed. Observed on `qTPgY3v4rLzbWVct` (all four fights): every Cybop, Neutronflux and
 Konstanten death row has an empty defensive assessment. The tables predate the Season 2
-roster (the old group was Monk / Mage / Rogue / Druid / Warlock).
+roster (the old group was Monk / Mage / Rogue / Druid / Warlock). Andreas also tanks some runs
+on the alt Cybesdk (Blood Death Knight, accepted via `config.ROSTER_ALIASES`), so Death Knight
+needs rows too (Icebound Fortitude, Vampiric Blood, Anti-Magic Shell, or current-build equivalents).
 
 **Where:** `claudelogger/defensives.py` — `PERSONAL_DEFENSIVES` (anchor: the
 `NOTE (12.0.7 audit)` comments), `CLASS_BASELINE` (anchor: `"Shaman": []`, `"Evoker": []`,

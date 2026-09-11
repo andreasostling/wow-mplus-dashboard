@@ -18,7 +18,9 @@ from claudelogger.classify import (
     _is_big_predictable, _overlapping_cc, _reconstruct_hp,
 )
 from claudelogger.cli import _talent_entries_by_player
-from claudelogger.config import ACTIVE_ROSTER, BOSS_GUIDES, DUNGEON_SLUGS, Knobs, REPO_ROOT, ROSTER
+from claudelogger.config import (
+    ACTIVE_ROSTER, BOSS_GUIDES, DUNGEON_SLUGS, Knobs, REPO_ROOT, ROSTER, ROSTER_ALIASES,
+)
 from claudelogger.defensives import PERSONAL_DEFENSIVES, owned_defensives
 from claudelogger.fetch import Actor, Fight, FightEvents, ReportData
 
@@ -60,7 +62,25 @@ class TestActiveRoster(unittest.TestCase):
             "Neutronflux": ("Evoker", "Devastation", "dps"),
             "Stickerduva": ("Rogue", "Subtlety", "dps"),
         })
-        self.assertEqual(ROSTER, frozenset(ACTIVE_ROSTER))
+        self.assertEqual(ROSTER, frozenset(ACTIVE_ROSTER) | frozenset(ROSTER_ALIASES))
+
+    def test_gate_accepts_a_five_stack_using_a_roster_alias(self):
+        # ACTIVE_ROSTER stays the five mains (it drives loot/gear/talents identity), but the
+        # clean-5-stack gate in cli.analyze_report matches *log* names, so alt/guest names
+        # must pass it. Mirrors the gate's own test: `n not in ROSTER`.
+        self.assertEqual(len(ACTIVE_ROSTER), 5)
+        self.assertEqual(ROSTER_ALIASES["Cybesdk"], "Cybop")   # Cybop's Blood DK tank alt
+        self.assertIsNone(ROSTER_ALIASES["Reaktorn"])          # guest, not a confirmed alt
+        for names in (
+            ["Cybop", "Gaddini", "Konstanten", "Neutronflux", "Stickerduva"],
+            ["Cybesdk", "Gaddini", "Konstanten", "Reaktorn", "Stickerduva"],
+        ):
+            self.assertEqual([n for n in names if n not in ROSTER], [])
+        self.assertEqual(
+            [n for n in ["Cybop", "Gaddini", "Konstanten", "Stranger", "Stickerduva"]
+             if n not in ROSTER],
+            ["Stranger"],
+        )
 
     def test_mid2_routes_and_boss_guides_cover_active_pool(self):
         routes = json.loads((REPO_ROOT / "routes.json").read_text(encoding="utf-8"))

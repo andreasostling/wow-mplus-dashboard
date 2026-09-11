@@ -182,7 +182,13 @@ DUNGEON_TIMERS: dict[str, int] = {
 # Verified WCL encounter ids for the Midnight S2 Mythic+ pool. Add an entry only after a
 # current report confirms it; public-danger sampling skips dungeons that are not listed.
 MPLUS_ENCOUNTERS: dict[str, int] = {
+    "Altar of Fangs": 12993,
+    "Den of Nalorakk": 12825,
+    "Murder Row": 12813,
     "Ruby Life Pools": 112521,
+    "Temple of Sethraliss": 61877,
+    "The Blinding Vale": 12859,
+    "Voidscar Arena": 12923,
 }
 
 # Map dungeon name → slug used for route .simc file names.
@@ -218,9 +224,25 @@ ARMORY_CHARACTERS: dict[str, tuple[str, str, str]] = {
     "Stickerduva": ("eu", "doomhammer", "stickerduva"),
 }
 
-# A legitimate M+ run logs exactly these five players. Used to reject fights WCL merged
-# with a foreign group before strangers reach party, cooldown, or CC analysis.
-ROSTER: frozenset[str] = frozenset(ACTIVE_ROSTER)
+# Alternate characters (and accepted guests) that may fill a slot in an otherwise clean
+# run: log name -> the main-roster name they belong to, or None when the character is not
+# confirmed as anyone's alt. The clean-5-stack gate in `cli.analyze_report` matches the
+# *log* display name, so an alt has to be listed here or its runs are dropped as a foreign
+# group (the Season 1 "Donnager 5th-slot alias" precedent did the same thing). The mapped
+# value is informational for now — nothing reads it yet; identity-bearing features (loot,
+# gear, talents, Armory) stay keyed on ACTIVE_ROSTER's five mains.
+ROSTER_ALIASES: dict[str, str | None] = {
+    # Cybop's Blood Death Knight tank alt (eu-doomhammer); tanked the 2026-08-25 runs.
+    "Cybesdk": "Cybop",
+    # Marksmanship Hunter who filled Neutronflux's DPS slot in the 2026-08-25 runs.
+    # Not confirmed as anyone's alt — treated as a guest.
+    "Reaktorn": None,
+}
+
+# A legitimate M+ run logs exactly five players, each of them either an active-roster main
+# or a known alias above. Used to reject fights WCL merged with a foreign group before
+# strangers reach party, cooldown, or CC analysis.
+ROSTER: frozenset[str] = frozenset(ACTIVE_ROSTER) | frozenset(ROSTER_ALIASES)
 
 # Current-season quick boss-guide links shown alongside the configured route.
 BOSS_GUIDES: dict[str, str] = {
