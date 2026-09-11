@@ -17,8 +17,8 @@ import bisect
 
 from .combatlog import ROUTINE_SPAWNED_ADDS
 from .config import Knobs
-from .defensives import (CLASS_BASELINE, DEFENSIVE_TALENT_ENTRIES, DEFENSIVE_VARIANTS,
-                         EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, defensive_covers_school)
+from .defensives import (EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES,
+                         defensive_covers_school, owned_defensives)
 from .fetch import Actor, Fight, FightEvents, ReportData
 from .knowledge import (
     AbilityKnowledge, COMP_CC_SEED, STUN_LIKE_KINDS, is_fixate, is_ground_effect, is_hard_cc,
@@ -377,6 +377,7 @@ def _assess_defensives(
     kb_school: int = 0,
     talent_entries: set[int] | None = None,
     baseline_without_talents: bool = True,
+    active_window_ms: int = Knobs.defensive_active_window_ms,
 ) -> DefensiveAssessment:
     """Did the victim (or a teammate) have a defensive off cooldown that would have
     covered the lethal margin? Conservative: counts the defensives the victim's talents
@@ -388,45 +389,25 @@ def _assess_defensives(
     means "you should have pre-pressed for this", not merely "you had a CD up when you
     died".
 
-    `talent_entries` is the victim's TraitNodeEntryIDs from WCL combatantInfo:
-      * a set  -> talents known: CLASS_BASELINE is pruned of every talent-gated spell
-                  whose entry is absent, and every talent-gated spell whose entry is
-                  present is added (so we stop claiming an untalented Ice Block and
-                  start crediting a talented Greater Invisibility).
-      * None   -> no combatantInfo on this fight: keep the coarse CLASS_BASELINE when
-                  `baseline_without_talents`, else drop every talent-gated spell.
-    Either way a spell the victim actually CAST in the fight is credited regardless —
-    a real cast is stronger proof of possession than any table.
+    Which defensives the victim owns is decided by `defensives.owned_defensives` (shared
+    with the cooldown-economy panel): `talent_entries` is their TraitNodeEntryIDs from
+    WCL combatantInfo, or None when the fight carried no combatantInfo, in which case
+    `baseline_without_talents` picks between the coarse class baseline and observed casts
+    only. A spell the victim actually CAST is always credited.
     """
     own = casts_by_source.get(victim.id, [])
     cast_ids = {c["abilityGameID"] for c in own
                 if c.get("abilityGameID") in PERSONAL_DEFENSIVES}
-    have = set(CLASS_BASELINE.get(victim.sub_type, []))
-    if talent_entries is not None:
-        # Entry ids are globally unique per talent node, so an intersection can only
-        # match the victim's own class — no need to scope the additions by class.
-        have = {sid for sid in have
-                if sid not in DEFENSIVE_TALENT_ENTRIES
-                or (DEFENSIVE_TALENT_ENTRIES[sid] & talent_entries)}
-        have |= {sid for sid, entries in DEFENSIVE_TALENT_ENTRIES.items()
-                 if entries & talent_entries}
-    elif not baseline_without_talents:
-        have -= set(DEFENSIVE_TALENT_ENTRIES)
-    have |= cast_ids
-    # Resolve replace-the-button talents last, so a variant never coexists with the base
-    # spell it replaced — whether we learned about it from talents or from a real cast.
-    for base, (entry, variant) in DEFENSIVE_VARIANTS.items():
-        if variant in cast_ids or (talent_entries is not None and entry in talent_entries):
-            have.discard(base)
-            have.add(variant)
+    have = owned_defensives(victim.sub_type, talent_entries, cast_ids,
+                            baseline_without_talents=baseline_without_talents)
 
     available, active, would_save = [], [], []
     for sid in have:
         name, cd_s, mit, school = PERSONAL_DEFENSIVES[sid]
         casts_before = [c["timestamp"] for c in own if c.get("abilityGameID") == sid and c["timestamp"] <= death_ts]
         last = max(casts_before) if casts_before else None
-        # Active if cast within ~the shorter of (cd, 12s) before death.
-        if last is not None and death_ts - last <= min(cd_s * 1000, 12_000):
+        # Active if cast within ~the shorter of (cd, the active window) before death.
+        if last is not None and death_ts - last <= min(cd_s * 1000, active_window_ms):
             active.append(name)
             continue
         on_cd = last is not None and (death_ts - last) < cd_s * 1000
@@ -624,6 +605,7 @@ def classify_fight(
             ts, target, casts_by_source, kb_amount, overkill, big_predictable, kb_school,
             talent_entries=(talent_entries_by_player or {}).get(target.id),
             baseline_without_talents=knobs.defensive_baseline_without_talents,
+            active_window_ms=knobs.defensive_active_window_ms,
         )
         if defensives.would_have_saved:
             notes.append("Big, predictable hit ("

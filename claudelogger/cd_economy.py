@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from .config import Knobs
-from .defensives import CLASS_BASELINE, EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES
+from .defensives import EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, owned_defensives
 from .fetch import Fight, FightEvents, ReportData
 
 # Major offensive cooldowns keyed by "classtoken:spectoken" → [(spell_id, name, cd_s, core)].
@@ -281,14 +281,19 @@ def analyze_cd_economy(
                             knobs.cd_low_usage_frac, fight.start_time, fight.end_time,
                             knobs.cd_missed_min_cd_s, knobs.cd_rarely_used_frac, talent_entries)
 
-        # Defensives the player can be fairly credited with: class baseline + any cast.
+        # Defensives the player can be fairly credited with — resolved by the same
+        # helper the death defensive check uses, so this panel can never claim a button
+        # the death rows say the player doesn't own (it used to list an untalented
+        # "Ice Block used 0" beside the "Ice Cold used 9" they actually press).
         # Shown as raw use counts — defensives are reactive, so a "% of theoretical max"
         # is misleading (the death-adjacent "available & unused" signal below is the real
         # judgement of under-use).
-        have_def = set(CLASS_BASELINE.get(actor.sub_type, []))
-        for c in casts:
-            if c.get("abilityGameID") in PERSONAL_DEFENSIVES:
-                have_def.add(c["abilityGameID"])
+        have_def = owned_defensives(
+            actor.sub_type, talent_entries,
+            {c["abilityGameID"] for c in casts
+             if c.get("abilityGameID") in PERSONAL_DEFENSIVES},
+            baseline_without_talents=knobs.defensive_baseline_without_talents,
+        )
         # Per-defensive cadence. A "regularly-usable" defensive (short CD, not an emergency
         # save or the Healthstone consumable) pressed far below once per (multiple × its CD)
         # looks ignored — e.g. a rogue who never weaves Feint. Long-CD emergency buttons
