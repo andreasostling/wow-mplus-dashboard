@@ -17,7 +17,8 @@ import bisect
 
 from .combatlog import ROUTINE_SPAWNED_ADDS
 from .config import Knobs
-from .defensives import CLASS_BASELINE, EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, defensive_covers_school
+from .defensives import (CLASS_BASELINE, DEFENSIVE_TALENT_ENTRIES, DEFENSIVE_VARIANTS,
+                         EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, defensive_covers_school)
 from .fetch import Actor, Fight, FightEvents, ReportData
 from .knowledge import AbilityKnowledge, COMP_CC_SEED, STUN_LIKE_KINDS, is_fixate, is_hard_cc
 from .pulls import Pull, pull_cc_tally, pull_index_for, segment_pulls
@@ -363,22 +364,50 @@ def _assess_defensives(
     overkill: int,
     big_predictable: bool,
     kb_school: int = 0,
+    talent_entries: set[int] | None = None,
+    baseline_without_talents: bool = True,
 ) -> DefensiveAssessment:
     """Did the victim (or a teammate) have a defensive off cooldown that would have
-    covered the lethal margin? Conservative: counts class-baseline defensives plus
-    anything actually cast in the fight. 'Would have saved' is only ever claimed when the
-    death was a big, predictable hit (see _is_big_predictable) AND the defensive's
-    mitigation covers the lethal margin (mitigation * killing_blow > overkill) AND the
-    defensive's school actually applies to the killing blow (kb_school) — so a Rogue isn't
-    told Cloak/Evasion would have saved a blow of the wrong school. It means "you should
-    have pre-pressed for this", not merely "you had a CD up when you died".
+    covered the lethal margin? Conservative: counts the defensives the victim's talents
+    prove they have, plus anything actually cast in the fight. 'Would have saved' is only
+    ever claimed when the death was a big, predictable hit (see _is_big_predictable) AND
+    the defensive's mitigation covers the lethal margin (mitigation * killing_blow >
+    overkill) AND the defensive's school actually applies to the killing blow (kb_school)
+    — so a Rogue isn't told Cloak/Evasion would have saved a blow of the wrong school. It
+    means "you should have pre-pressed for this", not merely "you had a CD up when you
+    died".
+
+    `talent_entries` is the victim's TraitNodeEntryIDs from WCL combatantInfo:
+      * a set  -> talents known: CLASS_BASELINE is pruned of every talent-gated spell
+                  whose entry is absent, and every talent-gated spell whose entry is
+                  present is added (so we stop claiming an untalented Ice Block and
+                  start crediting a talented Greater Invisibility).
+      * None   -> no combatantInfo on this fight: keep the coarse CLASS_BASELINE when
+                  `baseline_without_talents`, else drop every talent-gated spell.
+    Either way a spell the victim actually CAST in the fight is credited regardless —
+    a real cast is stronger proof of possession than any table.
     """
     own = casts_by_source.get(victim.id, [])
-    # Defensives we can prove the victim has: baseline-for-class + cast-in-fight.
+    cast_ids = {c["abilityGameID"] for c in own
+                if c.get("abilityGameID") in PERSONAL_DEFENSIVES}
     have = set(CLASS_BASELINE.get(victim.sub_type, []))
-    for c in own:
-        if c.get("abilityGameID") in PERSONAL_DEFENSIVES:
-            have.add(c["abilityGameID"])
+    if talent_entries is not None:
+        # Entry ids are globally unique per talent node, so an intersection can only
+        # match the victim's own class — no need to scope the additions by class.
+        have = {sid for sid in have
+                if sid not in DEFENSIVE_TALENT_ENTRIES
+                or (DEFENSIVE_TALENT_ENTRIES[sid] & talent_entries)}
+        have |= {sid for sid, entries in DEFENSIVE_TALENT_ENTRIES.items()
+                 if entries & talent_entries}
+    elif not baseline_without_talents:
+        have -= set(DEFENSIVE_TALENT_ENTRIES)
+    have |= cast_ids
+    # Resolve replace-the-button talents last, so a variant never coexists with the base
+    # spell it replaced — whether we learned about it from talents or from a real cast.
+    for base, (entry, variant) in DEFENSIVE_VARIANTS.items():
+        if variant in cast_ids or (talent_entries is not None and entry in talent_entries):
+            have.discard(base)
+            have.add(variant)
 
     available, active, would_save = [], [], []
     for sid in have:
@@ -429,6 +458,9 @@ def classify_fight(
     healer_mana_series: list[tuple[int, int, int]] | None = None,
     real_max_hp: dict[str, int] | None = None,  # char_name -> true max HP (from local log)
     danger_names: set[str] | None = None,        # ability names flagged as very dangerous casts
+    # actor_id -> TraitNodeEntryIDs from combatantInfo; absent player / None => talents
+    # unknown for them, and the defensive check falls back per Knobs.
+    talent_entries_by_player: dict[int, set[int]] | None = None,
 ) -> tuple[list[DeathFinding], list[dict[str, Any]]]:
     """Returns (death findings, per-pull CC tallies).
 
@@ -538,7 +570,11 @@ def classify_fight(
             notes.append("This pull was CC-starved (more interruptible casts leaked than the comp had kicks/stuns for).")
         big_predictable = _is_big_predictable(meaningful[0] if meaningful else None, max_hp, knobs)
         kb_school = rep.ability_school(d.get("killingAbilityGameID", 0))
-        defensives = _assess_defensives(ts, target, casts_by_source, kb_amount, overkill, big_predictable, kb_school)
+        defensives = _assess_defensives(
+            ts, target, casts_by_source, kb_amount, overkill, big_predictable, kb_school,
+            talent_entries=(talent_entries_by_player or {}).get(target.id),
+            baseline_without_talents=knobs.defensive_baseline_without_talents,
+        )
         if defensives.would_have_saved:
             notes.append("Big, predictable hit ("
                          + meaningful[0].ability_name + ") — pre-empt with a defensive; one was off cooldown that "

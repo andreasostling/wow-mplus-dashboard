@@ -236,6 +236,83 @@ class TestAssessDefensives(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# defensive availability keyed off the player's real talents
+# --------------------------------------------------------------------------
+class TestDefensiveTalentGating(unittest.TestCase):
+    """`CLASS_BASELINE` is only the no-talent-data fallback. When WCL gives us a
+    talentTree, availability must follow it: entry ids observed on the cached Xenas +12
+    run (Gaddini = Ice Block 80181 + Ice Cold 80141, no Mirror Image 80183)."""
+
+    ICE_BLOCK, ICE_COLD, MIRROR_IMAGE = 80181, 80141, 80183
+
+    def setUp(self):
+        self.mage = Actor(id=1, name="Gaddini", type="Player", sub_type="Mage")
+
+    def assess(self, talents, casts=None, death_ts=100000, **kw):
+        return _assess_defensives(
+            death_ts, self.mage, {1: casts or []}, 100000, 10000,
+            big_predictable=True, talent_entries=talents, **kw,
+        )
+
+    def test_ice_cold_talent_replaces_ice_block(self):
+        # Ice Cold is a modifier ON Ice Block: both entries present => ONE button, and
+        # it is Ice Cold (70% DR), never the Ice Block immunity.
+        a = self.assess({self.ICE_BLOCK, self.ICE_COLD})
+        self.assertIn("Ice Cold", a.available)
+        self.assertNotIn("Ice Block", a.available)
+
+    def test_untalented_ice_block_and_mirror_image_are_dropped(self):
+        # Neither mage talent taken -> the class baseline must not credit either.
+        a = self.assess(set())
+        self.assertNotIn("Ice Block", a.available)
+        self.assertNotIn("Mirror Image", a.available)
+        self.assertEqual(a.would_have_saved, [])
+
+    def test_talented_ice_block_without_ice_cold_stays_ice_block(self):
+        a = self.assess({self.ICE_BLOCK})
+        self.assertIn("Ice Block", a.available)
+        self.assertNotIn("Ice Cold", a.available)
+
+    def test_talented_extras_are_added_not_just_pruned(self):
+        # Mirror Image isn't reachable from the baseline alone here — it has to come
+        # from the talent entry itself.
+        a = self.assess({self.MIRROR_IMAGE})
+        self.assertIn("Mirror Image", a.available)
+
+    def test_no_talent_data_keeps_baseline_by_default(self):
+        # knob True (default): unchanged legacy behaviour for combatantInfo-less fights.
+        a = self.assess(None, baseline_without_talents=True)
+        self.assertIn("Ice Block", a.available)
+        self.assertIn("Mirror Image", a.available)
+
+    def test_no_talent_data_drops_gated_when_knob_false(self):
+        a = self.assess(None, baseline_without_talents=False)
+        self.assertNotIn("Ice Block", a.available)
+        self.assertNotIn("Mirror Image", a.available)
+
+    def test_observed_cast_beats_missing_talent(self):
+        # A real cast proves possession even when the talent table says otherwise.
+        # Mirror Image (120s CD) cast at t=0, death at 500s -> long off cooldown.
+        casts = [{"abilityGameID": 55342, "timestamp": 0}]
+        a = self.assess(set(), casts=casts, death_ts=500000)
+        self.assertIn("Mirror Image", a.available)
+        # ...and the same cast survives the knob-False path too.
+        b = self.assess(None, casts=casts, death_ts=500000, baseline_without_talents=False)
+        self.assertIn("Mirror Image", b.available)
+
+    def test_observed_ice_cold_cast_replaces_ice_block_without_talents(self):
+        # 414658 in the Casts stream is the Ice Cold button; the mage cannot also have
+        # Ice Block. Holds even on a fight with no combatantInfo.
+        casts = [{"abilityGameID": 414658, "timestamp": 495000}]   # 5s before death
+        a = self.assess(None, casts=casts, death_ts=500000, baseline_without_talents=True)
+        self.assertNotIn("Ice Block", a.available)
+        self.assertIn("Ice Cold", a.active_at_death)
+
+    def test_knob_default_is_permissive(self):
+        self.assertTrue(Knobs().defensive_baseline_without_talents)
+
+
+# --------------------------------------------------------------------------
 # healer hard-CC intervals
 # --------------------------------------------------------------------------
 class TestHealerCC(unittest.TestCase):

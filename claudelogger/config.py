@@ -66,6 +66,9 @@ class Knobs:
     defensive_dominant_frac: float = 0.5   # one ability is >= this share of lethal-window damage
     defensive_big_hp_frac: float = 0.5     # ...and dealt >= this fraction of max HP
     defensive_channel_min_ticks: int = 3   # a periodic source with >= this many ticks = a channel/DoT
+    # No combatantInfo on a fight => talents unknown: True keeps the coarse CLASS_BASELINE
+    # (optimistic), False credits only defensives the player was actually seen casting.
+    defensive_baseline_without_talents: bool = True
 
     # Confidence: empirical + curated agreement => high; single weak source => review.
     review_below_confidence: float = 0.5
