@@ -20,7 +20,9 @@ from .config import Knobs
 from .defensives import (CLASS_BASELINE, DEFENSIVE_TALENT_ENTRIES, DEFENSIVE_VARIANTS,
                          EXTERNAL_DEFENSIVES, PERSONAL_DEFENSIVES, defensive_covers_school)
 from .fetch import Actor, Fight, FightEvents, ReportData
-from .knowledge import AbilityKnowledge, COMP_CC_SEED, STUN_LIKE_KINDS, is_fixate, is_hard_cc
+from .knowledge import (
+    AbilityKnowledge, COMP_CC_SEED, STUN_LIKE_KINDS, is_fixate, is_ground_effect, is_hard_cc,
+)
 from .pulls import Pull, pull_cc_tally, pull_index_for, segment_pulls
 
 ENVIRONMENT_ID = -1
@@ -56,6 +58,9 @@ class Contribution:
     stunnable: bool = False
     stunnable_src: str = "unknown"
     is_ground: bool = False
+    # Which tier proved is_ground: "environment" | "curated" | "inferred" | None.
+    # Always carried alongside the flag so a guess is never mistaken for evidence.
+    ground_evidence: str | None = None
     is_self_or_friendly: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,6 +83,7 @@ class Contribution:
                 # renders from this, not the raw stunnable flag, so melee no longer shows [stun].
                 "stun_stoppable": _stun_stoppable(self),
                 "ground_effect": self.is_ground,
+                "ground_evidence": self.ground_evidence,
             },
         }
 
@@ -146,6 +152,10 @@ class DeathFinding:
     is_cascade: bool = False
     needs_stun_of: list[str] = field(default_factory=list)
     needs_interrupt_of: list[str] = field(default_factory=list)
+    # Only set when bucket is OFF_TANK_MELEE: "pulled_aggro" (the mob reached this
+    # player before the tank ever had it) | "tank_pickup" (the tank had it and lost
+    # it) | "unknown". None for every other bucket.
+    threat_kind: str | None = None
     notes: list[str] = field(default_factory=list)
     dangerous_cast: str = ""  # ability name if the lethal cast is a flagged high-damage cast
 
@@ -168,6 +178,7 @@ class DeathFinding:
             "confidence": round(self.confidence, 2),
             "needs_interrupt_of": self.needs_interrupt_of,
             "needs_stun_of": self.needs_stun_of,
+            "threat_kind": self.threat_kind,
             "pull_index": self.pull_index,
             "contributions": [c.to_dict() for c in self.contributions],
             "healer": self.healer.to_dict(),
@@ -496,15 +507,36 @@ def classify_fight(
     }
     healer_cc = _healer_cc_intervals(fe.of("Debuffs"), healer_ids, rep, knobs)
 
-    # Threat/fixate context for melee deaths: which mobs ever meleed the tank, and
-    # which players had a forced-target (fixate) aura applied to them and when.
+    # Debuff applications on each player as (ts, sourceID, abilityGameID). Used to tell
+    # a DoT *on you* (which debuffs you) from a persistent zone you are standing in
+    # (which just ticks) — see the "inferred" ground tier in _attribute.
+    debuff_apps_by_target: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    for e in fe.of("Debuffs"):
+        if e.get("type") in ("applydebuff", "applydebuffstack", "refreshdebuff"):
+            debuff_apps_by_target[e.get("targetID")].append(
+                (e["timestamp"], e.get("sourceID", ENVIRONMENT_ID), e.get("abilityGameID", 0))
+            )
+
+    # Threat/fixate context for melee deaths. `mob_meleed_tank` is keyed per
+    # (pull, sourceID, sourceInstance) -> the first time that *specific* mob meleed the
+    # tank in that pull. Pull scoping and the instance matter: "this mob type was
+    # tankable somewhere else in the run" says nothing about whether the tank ever had
+    # the copy that killed a DPS here. Also: which players had a forced-target
+    # (fixate) aura applied to them and when, and when each tank died.
     tank_ids = {aid for aid, (r, _s) in roles.items() if r == "tank"}
-    mob_meleed_tank: set[int] = set()
+    mob_meleed_tank: dict[tuple[int | None, int, int], int] = {}
     for e in fe.of("DamageTaken"):
         if e.get("targetID") in tank_ids and "Melee" in rep.ability_name(e.get("abilityGameID", 0)):
             src = actors.get(e.get("sourceID"))
             if src and not src.is_player:
-                mob_meleed_tank.add(src.id)
+                key = (pull_index_for(pulls, e["timestamp"]), src.id, e.get("sourceInstance", 0))
+                prev = mob_meleed_tank.get(key)
+                if prev is None or e["timestamp"] < prev:
+                    mob_meleed_tank[key] = e["timestamp"]
+    tank_death_ts: dict[int, list[int]] = defaultdict(list)
+    for d in deaths:
+        if d["targetID"] in tank_ids:
+            tank_death_ts[d["targetID"]].append(d["timestamp"])
     fixate_apps = [
         (e["targetID"], e["timestamp"], rep.ability_name(e.get("abilityGameID", 0)))
         for e in fe.of("Debuffs")
@@ -533,23 +565,42 @@ def classify_fight(
         win_start = _window_start(trace, ts, max_hp, knobs)
 
         window = [e for e in dmg if win_start <= e["timestamp"] <= ts]
-        contribs = _attribute(window, actors, rep, kb)
+        # Every debuff application on this victim at or before the death — not merely
+        # inside the window. A DoT applied before the window opened still debuffs them;
+        # ignoring it would resurrect exactly the tick-pattern guessing we rejected.
+        victim_debuffs = {
+            (sid, ab) for (dts, sid, ab) in debuff_apps_by_target.get(tid, ()) if dts <= ts
+        }
+        contribs = _attribute(window, actors, rep, kb, knobs, victim_debuffs)
         total = sum(c.amount for c in contribs) or 1
         meaningful = [c for c in contribs if c.pct >= knobs.contributor_min_frac]
 
         one_shot = max_hp > 0 and pre_kill_hp >= knobs.oneshot_frac * max_hp
+        pull_index = pull_index_for(pulls, ts)
 
         bucket, avoidable, confidence, notes = _decide_bucket(
             meaningful, one_shot, max_hp
         )
         # Melee-dominant deaths get a threat/fixate-aware reclassification.
+        threat_kind: str | None = None
         if meaningful and "Melee" in meaningful[0].ability_name and not meaningful[0].is_self_or_friendly:
             fixate_aura = next(
-                (nm for (tg, fts, nm) in fixate_apps if tg == tid and ts - 25_000 <= fts <= ts), ""
+                (nm for (tg, fts, nm) in fixate_apps
+                 if tg == tid and ts - knobs.threat_fixate_lookback_ms <= fts <= ts), ""
             )
-            bucket, avoidable, confidence, notes = _classify_melee(
-                meaningful[0], role, mob_meleed_tank, fixate_aura
-            )
+            tank_up = _tank_alive_at(ts, tank_ids, tank_death_ts, casts_by_source)
+            if role != "tank" and not fixate_aura and not tank_up:
+                # No tank was alive to hold anything. Melee on a DPS/healer here is the
+                # consequence of the tank's death, not a pickup failure — keep the
+                # damage-based bucket and say so rather than blaming threat.
+                notes.append(_tank_down_note(ts, tank_ids, tank_death_ts, actors))
+            else:
+                tanked, kind = _threat_kind(
+                    meaningful[0], window, dmg, pulls, pull_index, mob_meleed_tank, knobs
+                )
+                bucket, avoidable, confidence, notes, threat_kind = _classify_melee(
+                    meaningful[0], role, fixate_aura, tanked, kind
+                )
         needs_interrupt = sorted({c.source_name for c in meaningful if c.interruptible})
         needs_stun = sorted({c.source_name for c in meaningful if _stun_stoppable(c)})
 
@@ -564,7 +615,6 @@ def classify_fight(
             healer_death_ts, healer_mana_series, healer_cc,
             lethal_stoppable, is_env_death, knobs,
         )
-        pull_index = pull_index_for(pulls, ts)
         if bucket == INTERRUPT and pull_index in starved_pulls:
             confidence = min(0.97, confidence + 0.1)
             notes.append("This pull was CC-starved (more interruptible casts leaked than the comp had kicks/stuns for).")
@@ -605,6 +655,7 @@ def classify_fight(
                 pull_index=pull_index,
                 needs_interrupt_of=needs_interrupt,
                 needs_stun_of=needs_stun,
+                threat_kind=threat_kind,
                 notes=notes,
             )
         )
@@ -669,6 +720,8 @@ def _attribute(
     actors: dict[int, Actor],
     rep: ReportData,
     kb: AbilityKnowledge,
+    knobs: Knobs | None = None,
+    victim_debuffs: set[tuple[int, int]] | None = None,
 ) -> list[Contribution]:
     agg: dict[tuple[int, int], dict[str, Any]] = {}
     for e in window:
@@ -691,10 +744,10 @@ def _attribute(
         is_self = src is not None and src.is_player
         game_id = src.game_id if src else 0
         periodic = s["periodic"] >= max(1, s["ticks"] // 2)
-        # Ground = environmental damage only. Mob-placed pools that don't register
-        # as "Environment" need the MDT layer to recognise; we do NOT guess from
-        # tick patterns (that misfired badly on DoTs/channels/melee).
-        is_ground = is_env
+        ability_name = rep.ability_name(ab)
+        is_ground, ground_ev = _ground_tier(
+            ab, ability_name, is_env, is_self, src, sid, s, knobs, victim_debuffs
+        )
         interruptible, i_src = kb.is_interruptible(ab)
         stunnable, s_src = kb.is_source_stunnable(game_id, ab)
         # Summoned add-objects (Mana Battery, Smudge, …) detonate/overload — the counter is
@@ -709,7 +762,7 @@ def _attribute(
                 source_name=(src.name if src else "Environment"),
                 source_game_id=game_id,
                 ability_id=ab,
-                ability_name=rep.ability_name(ab),
+                ability_name=ability_name,
                 amount=s["amount"],
                 pct=s["amount"] / total,
                 ticks=s["ticks"],
@@ -720,11 +773,59 @@ def _attribute(
                 stunnable=stunnable and not is_env and not is_self,
                 stunnable_src=s_src,
                 is_ground=is_ground,
+                ground_evidence=ground_ev,
                 is_self_or_friendly=is_self,
             )
         )
     out.sort(key=lambda c: -c.amount)
     return out
+
+
+def _ground_tier(
+    ability_id: int,
+    ability_name: str,
+    is_env: bool,
+    is_self: bool,
+    src: Actor | None,
+    source_id: int,
+    slot: dict[str, Any],
+    knobs: Knobs | None,
+    victim_debuffs: set[tuple[int, int]] | None,
+) -> tuple[bool, str | None]:
+    """Was this contribution a persistent zone the victim stood in, and on what evidence?
+
+    Three labelled tiers, strongest first:
+
+      environment — WCL sourced the damage to the Environment (sourceID -1 or an actor
+                    literally named "Environment"). This was the only tier for a long
+                    time, which is why mob-placed pools never showed up at all.
+      curated     — knowledge.GROUND_EFFECT_ABILITIES, or its narrow name fallback.
+      inferred    — knob-gated guess: NPC-sourced *periodic* damage with at least
+                    knobs.ground_min_ticks ticks in the window and NO debuff of the
+                    same ability from that source on the victim. A pool ticks on you
+                    without debuffing you; a DoT debuffs you. It is still a guess, so
+                    it is labelled as one and can be switched off entirely.
+
+    Player-sourced damage is never ground: a teammate's Consecration / Death and Decay
+    is not the lever we want, and self-damage least of all.
+    """
+    if is_env:
+        return True, "environment"
+    if is_self:
+        return False, None
+    if is_ground_effect(ability_id, ability_name):
+        return True, "curated"
+    if knobs is None or not knobs.ground_infer_periodic_no_debuff:
+        return False, None
+    if src is None or src.is_player:
+        return False, None
+    # Majority-periodic AND enough ticks to be a zone rather than a stray proc.
+    if not (slot["periodic"] >= max(1, slot["ticks"] // 2)
+            and slot["periodic"] >= max(1, knobs.ground_min_ticks)):
+        return False, None
+    if victim_debuffs and (source_id, ability_id) in victim_debuffs:
+        return False, None     # they were debuffed with it — that's a DoT, not a floor
+    return True, "inferred"
 
 
 def _stun_stoppable(c: Contribution) -> bool:
@@ -740,7 +841,10 @@ def _stun_stoppable(c: Contribution) -> bool:
     """
     if not (c.stunnable and not c.interruptible):
         return False
-    if c.periodic or c.is_ground:
+    # Deliberately `is_environment`, not `is_ground`: since ground detection widened to
+    # curated/inferred tiers, a stoppable cast that also places a pool must still read
+    # as a STOP (stop > avoid), so the ground flag alone must not mute the stun lever.
+    if c.periodic or c.is_environment:
         return False
     if c.ability_name.strip().lower() in ("melee", "", "physical"):
         return False
@@ -771,13 +875,18 @@ def _decide_bucket(
         observed = any(
             (best_bucket == INTERRUPT and c.interruptible and c.interruptible_src == "observed")
             or (best_bucket == STUN and _stun_stoppable(c) and c.stunnable_src == "observed")
-            or (best_bucket == GROUND and c.is_ground)
+            # "inferred" ground is the one guessing tier — it must not buy the same
+            # confidence as environment-sourced or curated evidence.
+            or (best_bucket == GROUND and c.is_ground and c.ground_evidence != "inferred")
             for c in meaningful
         )
         conf = min(0.95, 0.45 + best_weight) * (1.0 if observed else 0.7)
         if best_bucket == GROUND:
-            notes.append("Environmental/ground damage — usually avoidable by moving; "
-                         "confirm it wasn't a forced room-wide mechanic.")
+            evid = sorted({c.ground_evidence for c in meaningful
+                           if c.is_ground and c.ground_evidence})
+            notes.append("Stood in a ground / persistent area effect — the lever is to move out"
+                         + (f" (evidence: {', '.join(evid)})" if evid else "")
+                         + "; confirm it wasn't a forced room-wide mechanic.")
         return best_bucket, True, conf, notes
 
     # No CC lever. A one-shot from near-full with nothing to stop it is unavoidable.
@@ -815,26 +924,138 @@ def _decide_bucket(
     ]
 
 
-def _classify_melee(top, role, mob_meleed_tank, fixate_aura):
-    """Reclassify a melee-dominant death: tank survivability vs fixate vs off-tank threat."""
+def _tank_alive_at(
+    ts: int,
+    tank_ids: set[int],
+    tank_death_ts: dict[int, list[int]],
+    casts_by_source: dict[int, list[dict]],
+) -> bool:
+    """Was any tank on their feet at `ts`?
+
+    A tank counts as alive when they have no death at or before `ts`, or when they cast
+    something after their latest such death and before `ts` — the only battle-res
+    evidence the streams give us, since the Casts stream is friendlies-only and a dead
+    player casts nothing. With two tanks, one alive is enough.
+
+    With no tank in the roles map at all we return True: "we don't know" must not
+    silently suppress every threat finding.
+    """
+    if not tank_ids:
+        return True
+    for tid in tank_ids:
+        prior = [t for t in tank_death_ts.get(tid, ()) if t <= ts]
+        if not prior:
+            return True
+        last = max(prior)
+        if any(last < c["timestamp"] <= ts for c in casts_by_source.get(tid, ())):
+            return True   # cast after dying => battle-rezzed and back up
+    return False
+
+
+def _tank_down_note(
+    ts: int, tank_ids: set[int], tank_death_ts: dict[int, list[int]], actors: dict[int, Actor]
+) -> str:
+    latest: tuple[int, int] | None = None
+    for tid in tank_ids:
+        prior = [t for t in tank_death_ts.get(tid, ()) if t <= ts]
+        if prior and (latest is None or max(prior) > latest[1]):
+            latest = (tid, max(prior))
+    if latest is None:
+        return ("No tank was alive at this point — melee on a non-tank is not a pickup "
+                "failure here.")
+    who = actors[latest[0]].name if latest[0] in actors else "The tank"
+    gap = (ts - latest[1]) / 1000.0
+    return (f"{who} was already dead {gap:.1f}s earlier; melee on a non-tank is not a pickup "
+            f"failure here — fix the death that lost the tank, not the threat.")
+
+
+def _threat_kind(
+    top: Contribution,
+    window: list[dict[str, Any]],
+    dmg: list[dict[str, Any]],
+    pulls: list[Pull],
+    pull_index: int | None,
+    mob_meleed_tank: dict[tuple[int | None, int, int], int],
+    knobs: Knobs,
+) -> tuple[bool, str]:
+    """(tank was meleed by this mob in this pull, sub-kind) for a melee-dominant death.
+
+    The mob is identified by (sourceID, sourceInstance) — the *copy* that did the
+    killing, not the mob type — and everything is scoped to the victim's own pull, so a
+    mob the tank held two packs ago proves nothing here. Sub-kind:
+
+      pulled_aggro — the mob reached the victim at least threat_first_hit_lead_ms
+                     before it ever meleed the tank in this pull, or never meleed the
+                     tank there at all: threat, held by the wrong player from the start.
+      tank_pickup  — the tank had it first and it switched off: a pickup failure.
+      unknown      — the order is too close to call, or the victim's own first melee
+                     can't be located.
+    """
+    # Which copy of the mob actually did the damage? The one contributing most of the
+    # lethal window's melee.
+    by_inst: dict[int, int] = defaultdict(int)
+    for e in window:
+        if e.get("sourceID") == top.source_id and e.get("abilityGameID") == top.ability_id:
+            by_inst[e.get("sourceInstance", 0)] += (e.get("amount", 0) or 0) + (e.get("absorbed", 0) or 0)
+    inst = max(by_inst, key=by_inst.get) if by_inst else 0
+
+    tank_first = mob_meleed_tank.get((pull_index, top.source_id, inst))
+    tanked = tank_first is not None
+
+    pull = next((p for p in pulls if p.index == pull_index), None) if pull_index is not None else None
+    victim_first = None
+    for e in dmg:
+        if e.get("sourceID") != top.source_id or e.get("abilityGameID") != top.ability_id:
+            continue
+        if e.get("sourceInstance", 0) != inst:
+            continue
+        if pull is not None and not pull.contains(e["timestamp"]):
+            continue
+        victim_first = e["timestamp"]
+        break     # dmg is time-sorted
+
+    if tank_first is None:
+        return tanked, "pulled_aggro"
+    if victim_first is None:
+        return tanked, "unknown"
+    if tank_first - victim_first >= knobs.threat_first_hit_lead_ms:
+        return tanked, "pulled_aggro"
+    if tank_first < victim_first:
+        return tanked, "tank_pickup"
+    return tanked, "unknown"
+
+
+def _classify_melee(top, role, fixate_aura, tanked=False, threat_kind="unknown"):
+    """Reclassify a melee-dominant death: tank survivability vs fixate vs off-tank threat.
+
+    Returns (bucket, avoidable, confidence, notes, threat_kind) — threat_kind is None
+    for everything except OFF_TANK_MELEE.
+    """
     if role == "tank":
         return NO_DEF, True, 0.55, [
             "Raw melee on the tank — survivability (active mitigation / defensive / healer "
             "cooldown), not a threat issue."
-        ]
+        ], None
     if fixate_aura:
         return FIXATE, True, 0.85, [
             f"Forced-target mechanic ({fixate_aura}) from {top.source_name} — the mob is fixated "
             f"on this player regardless of threat, NOT a tank-aggro failure. Fixated player "
             f"kites / pops a defensive."
-        ]
-    tanked = top.source_id in mob_meleed_tank
+        ], None
     conf = 0.7 if tanked else 0.5
-    why = "this mob is tankable (it meleed the tank elsewhere this run) — " if tanked else ""
+    why = "this mob is tankable (it meleed the tank in this pull) — " if tanked else ""
+    if threat_kind == "pulled_aggro":
+        what = ("it reached this player before the tank ever had it — pulled aggro: "
+                "hold burst until threat is set, and the tank opens on the whole pack")
+    elif threat_kind == "tank_pickup":
+        what = ("the tank had it first and it switched off — not picked up: taunt/Provoke "
+                "it back and re-establish threat on loose adds")
+    else:
+        what = ("threat/pickup issue — tank grabs it earlier (Keg Smash on the pack / "
+                "Provoke loose adds), DPS holds burst until threat is set")
     return OFF_TANK_MELEE, True, conf, [
-        f"Off-tank melee on the {role}: {why}threat/pickup issue — tank grabs it earlier "
-        f"(Keg Smash on the pack / Provoke loose adds), DPS holds burst until threat is set."
-    ]
+        f"Off-tank melee on the {role}: {why}{what}."
+    ], threat_kind
 
 
 def _assess_healer(
